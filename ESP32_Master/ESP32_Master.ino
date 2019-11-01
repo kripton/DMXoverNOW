@@ -4,22 +4,30 @@
 #include <driver/rtc_io.h>
 #include <esp_system.h>
 
-#include <WiFi.h>
+#include <EEPROM.h>
 
 #include "cdecode.c"
 #include "cencode.c"
 
 #include "heatshrink_encoder.c"
 
+#define DMX_UNIVERSES 4
+
 // Unique device identification
 uint64_t chipid;
 static char deviceid[21];
 
-// Input + Output buffer
+// Persistent data from and to EEPROM, including defaults
+struct PersistentData {
+  uint32_t magic = 0xdeadbeef;
+  uint8_t nowChannel = 11;
+  uint8_t nowKey[16] = {39, 21, 129, 255, 12, 43, 87, 154, 143, 30, 88, 72, 11, 189, 232, 40};
+  char networkName[20] = "DMXoverNOW 00      ";
+} persistentData, defaultData;
+
+// Serial Input + Output buffer
 static uint8_t serialData[1024];
 static uint8_t serialDecoded[770];
-
-#define DMX_UNIVERSES 4
 
 // Stores the latest values of all universes
 static uint8_t dmxBuf[DMX_UNIVERSES][512];
@@ -57,6 +65,20 @@ heatshrink_encoder hse;
 // ===== SETUP ============================
 // ========================================
 void setup() {
+  // Set up the OLED and memory
+  u8g2.initDisplay();
+  u8g2.setPowerSave(0);
+  line1.reserve(25);
+  line2.reserve(25);
+  line3.reserve(25);
+  line4.reserve(25);
+  line5.reserve(25);
+  line6.reserve(25);
+
+  sprintf((char*)line1.c_str(), "Loading ...       %02d", esp_reset_reason());
+  printLCD();
+
+  // Device init
   chipid = ESP.getEfuseMac();
   sprintf(deviceid, "%" PRIu64, chipid);
 
@@ -69,17 +91,18 @@ void setup() {
   // 10ms should be about 1152 byte at 921600 bit/s
   Serial.setTimeout(10);
 
-  u8g2.initDisplay();
-  u8g2.setPowerSave(0);
+  // Read persistent settings (NOW channel, NOW key and network name)
+  EEPROM.begin(sizeof(PersistentData));
+  // Read the EEPROM to one of the two struct instances
+  EEPROM.get(0, persistentData);
+  if (persistentData.magic != 0xdeadbeef) {
+    // EEPROM data is invalid, write the defaults
+    memcpy((void*)&persistentData, (const void*)&defaultData, sizeof(PersistentData));
+    EEPROM.put(0, persistentData);
+    EEPROM.commit();
+  }
 
-  line1.reserve(25);
-  line2.reserve(25);
-  line3.reserve(25);
-  line4.reserve(25);
-  line5.reserve(25);
-  line6.reserve(25);
-
-  sprintf((char*)line1.c_str(), "Awaiting Init ... %02d", esp_reset_reason());
+  sprintf((char*)line1.c_str(), "Awaiting Init ...  %02d", esp_reset_reason());
   printLCD();
 }
 
@@ -103,18 +126,19 @@ void compressDmxBuf() {
 
 char getSpinner() {
   switch (spinner % 4) {
-    case 0: return '-'; break;
     case 1: return '\\'; break;
     case 2: return '|'; break;
     case 3: return '/'; break;
+    default: return '-'; break;
   }
 }
 
 void printLCD() {
-  sprintf((char*)line2.c_str(), "Commands: %05x    %c", commandCount, getSpinner());
+  sprintf((char*)line2.c_str(), "N: %s", persistentData.networkName);
+  sprintf((char*)line3.c_str(), "Commands: %05x     %c", commandCount, getSpinner());
 
 
-  sprintf((char*)line6.c_str(), "%02x%02x%02x%02x%02x%02x %02x%02x%02x", dmxBuf[0][0], dmxBuf[0][1], dmxBuf[0][2], dmxBuf[0][3], dmxBuf[0][4], dmxBuf[0][5], dmxBuf[0][6], dmxBuf[0][7], dmxBuf[0][8]);
+  sprintf((char*)line6.c_str(), "%02x%02x%02x%02x%02x%02x %02x%02x%02x%02x", dmxBuf[0][0], dmxBuf[0][1], dmxBuf[0][2], dmxBuf[0][3], dmxBuf[0][4], dmxBuf[0][5], dmxBuf[0][6], dmxBuf[0][7], dmxBuf[0][8], dmxBuf[0][9]);
 
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
@@ -143,8 +167,7 @@ void encodeAndSendReplyToHost(size_t length_in) {
 // ===== Command Handlers==================
 // ========================================
 
-// INIT
-void cmd_01() {
+void cmd_init() {
   size_t offset = 0;
   
   // Clear all buffers
@@ -158,32 +181,36 @@ void cmd_01() {
   memcpy((void*)line1.c_str(), serialDecoded + 2, 20);
 
   // Reply
-  memset((void*)serialDecoded + offset, 0, 1);        // Protocol version
+  memset((void*)serialDecoded + offset, 0x81, 1);                        // Reply to 0x01 command
   offset += 1;
-  sprintf((char*)serialDecoded + offset, "00.00.00"); // FW version
+  memset((void*)serialDecoded + offset, 0, 1);                           // 0x00 = all good
+  offset += 1;
+  memset((void*)serialDecoded + offset, 0, 1);                           // Protocol version
+  offset += 1;
+  sprintf((char*)serialDecoded + offset, "00.00.00");                    // FW version
   offset += 8;
-  memset((void*)serialDecoded + offset, 11, 1);       // NOW channel
+  memset((void*)serialDecoded + offset, persistentData.nowChannel, 1);   // NOW channel
   offset += 1;
-  // 16 byte key
+  memcpy((void*)serialDecoded + offset, persistentData.nowKey, 16);      // NOW master key
   offset += 16;
-  memcpy((void*)serialDecoded + offset, &chipid, 8);
+  memcpy((void*)serialDecoded + offset, &chipid, 8);                     // Unique device ID
   offset += 8;
-  sprintf((char*)serialDecoded + offset, "MyCoolNetwork       "); // Network name
+  memcpy((void*)serialDecoded + offset, persistentData.networkName, 20); // Network name
   offset += 20;
   
   encodeAndSendReplyToHost(offset);
+}
+
+void cmd_ping() {
+  size_t offset = 0;
+
+  // Reply
+  memset((void*)serialDecoded + offset, 0x82, 1);                 // Reply to 0x02 command
+  offset += 1;
+  memset((void*)serialDecoded + offset, 0, 1);                    // 0x00 = all good
+  offset += 1;
   
-  //sprintf((char*)serialDecoded, "HelloWorld!");
-  //encodeAndSendReplyToHost(11);
-  /*
-  Serial.write("00.00.00"); // FW version
-  Serial.write(0);          // Protocol version
-  Serial.write(11);         // NOW channel
-  Serial.write(dmxBuf[0], 16); // NOW Key
-  Serial.write(&chipid, 8); // Unique device ID
-  Serial.write("MyCoolNetwork       "); // Network name
-  */
-  //encodeAndSendReplyToHost(54);
+  encodeAndSendReplyToHost(offset);
 }
 
 // ========================================
@@ -216,9 +243,12 @@ void loop() {
 
     switch (serialDecoded[0]) {
       case 0x01:
-        // INIT
-        cmd_01();
+        cmd_init();
         break;
+
+      case 0x02:
+        cmd_ping();
+        break;  
 
       default:
         commandKnown = 0;
