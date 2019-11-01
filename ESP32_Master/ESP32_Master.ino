@@ -132,7 +132,7 @@ void encodeAndSendReplyToHost(size_t length_in) {
   
   base64_init_encodestate(&b64enc);
   sendSize += base64_encode_block((const char*)serialDecoded, length_in, (char*)serialData, &b64enc);
-  sendSize += base64_encode_blockend((char*)serialData, &b64enc);
+  sendSize += base64_encode_blockend((char*)(serialData + sendSize), &b64enc);
   sendSize++;
   serialData[sendSize] = 0; // Terminate with a NULL-byte
   Serial.write(serialData, sendSize);
@@ -145,6 +145,8 @@ void encodeAndSendReplyToHost(size_t length_in) {
 
 // INIT
 void cmd_01() {
+  size_t offset = 0;
+  
   // Clear all buffers
   memset(dmxBuf, 0, 512 * DMX_UNIVERSES);
   memset(dmxPrevBuf, 0, 512 * DMX_UNIVERSES);
@@ -156,7 +158,23 @@ void cmd_01() {
   memcpy((void*)line1.c_str(), serialDecoded + 2, 20);
 
   // Reply
-  sprintf((char*)serialDecoded, "00.00.00\x00\x0b\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00MyCoolNetwork       ");
+  memset((void*)serialDecoded + offset, 0, 1);        // Protocol version
+  offset += 1;
+  sprintf((char*)serialDecoded + offset, "00.00.00"); // FW version
+  offset += 8;
+  memset((void*)serialDecoded + offset, 11, 1);       // NOW channel
+  offset += 1;
+  // 16 byte key
+  offset += 16;
+  memcpy((void*)serialDecoded + offset, &chipid, 8);
+  offset += 8;
+  sprintf((char*)serialDecoded + offset, "MyCoolNetwork       "); // Network name
+  offset += 20;
+  
+  encodeAndSendReplyToHost(offset);
+  
+  //sprintf((char*)serialDecoded, "HelloWorld!");
+  //encodeAndSendReplyToHost(11);
   /*
   Serial.write("00.00.00"); // FW version
   Serial.write(0);          // Protocol version
@@ -165,7 +183,7 @@ void cmd_01() {
   Serial.write(&chipid, 8); // Unique device ID
   Serial.write("MyCoolNetwork       "); // Network name
   */
-  encodeAndSendReplyToHost(54);
+  //encodeAndSendReplyToHost(54);
 }
 
 // ========================================
