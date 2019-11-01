@@ -1,17 +1,31 @@
+// ========================================
+// ===== INCLUDES =========================
+// ========================================
+
+// OLEDD display driver
 #include <U8x8lib.h>
 #include <U8g2lib.h>
 
-#include <driver/rtc_io.h>
+// System stuff (unique Id, reboot reason, ...)
 #include <esp_system.h>
 
+// Persistent data storage
 #include <EEPROM.h>
 
+// Base64
 #include "cdecode.c"
 #include "cencode.c"
 
+// Data compression
 #include "heatshrink_encoder.c"
 
+// Number of supported DMX universes
 #define DMX_UNIVERSES 4
+
+
+// ========================================
+// ===== GLOBALS ==========================
+// ========================================
 
 // Unique device identification
 uint64_t chipid;
@@ -36,6 +50,7 @@ static uint8_t dmxPrevBuf[DMX_UNIVERSES][512];
 
 // Stores one complete dmx universe in compressed form
 static uint8_t dmxCompBuf[600];
+static size_t  dmxCompSize = 0;
 
 // Instance to talk to our OLED
 U8G2_SSD1306_128X64_NONAME_F_SW_I2C u8g2(U8G2_R0, /* clock=*/ 15, /* data=*/ 4, /* reset=*/ 16);
@@ -61,9 +76,11 @@ base64_encodestate b64enc;
 // Statically allocated heatshrink encoder
 heatshrink_encoder hse;
 
+
 // ========================================
 // ===== SETUP ============================
 // ========================================
+
 void setup() {
   // Set up the OLED and memory
   u8g2.initDisplay();
@@ -106,22 +123,26 @@ void setup() {
   printLCD();
 }
 
+
 // ========================================
 // ===== Helper functions==================
 // ========================================
 
-void compressDmxBuf() {
+void compressDmxBuf(uint8_t universeId) {
+  int sink_res = 0;
+  size_t sizeSunk = 0;
+  int poll_res = 0;
+
+  // Init encoder and zero output buffer
   heatshrink_encoder_reset(&hse);
   memset(dmxCompBuf, 0, 600);
+  dmxCompSize = 0;
 
   // Compresssion
-  size_t sizeSunk = 0;
-  int sink_res = heatshrink_encoder_sink(&hse, (uint8_t*)dmxBuf, 512, &sizeSunk);
-  //line3 = String("Res: ") + String(sink_res) + String(" Sunk: ") + String(sizeSunk);
+  sink_res = heatshrink_encoder_sink(&hse, (uint8_t*)dmxBuf[universeId], 512, &sizeSunk);
   heatshrink_encoder_finish(&hse);
   
-  size_t polled = 0;
-  int poll_res = heatshrink_encoder_poll(&hse, (uint8_t*)dmxCompBuf, 600, &polled);
+  poll_res = heatshrink_encoder_poll(&hse, (uint8_t*)dmxCompBuf, 600, &dmxCompSize);
 }
 
 char getSpinner() {
@@ -163,8 +184,9 @@ void encodeAndSendReplyToHost(size_t length_in) {
   Serial.flush();
 }
 
+
 // ========================================
-// ===== Command Handlers==================
+// ===== Command Handlers =================
 // ========================================
 
 void cmd_init() {
@@ -173,8 +195,10 @@ void cmd_init() {
   // Clear all buffers
   memset(dmxBuf, 0, 512 * DMX_UNIVERSES);
   memset(dmxPrevBuf, 0, 512 * DMX_UNIVERSES);
+  memset(dmxCompBuf, 0, 600);
   spinner = 0;
   commandCount = 0;
+  dmxCompSize = 0;
 
   // Read host name and save it
   memset((void*)line1.c_str(), 0, 25);
@@ -213,10 +237,92 @@ void cmd_ping() {
   encodeAndSendReplyToHost(offset);
 }
 
+void cmd_confNow() {
+  size_t offset = 0;
+
+  // Save the new values
+  persistentData.nowChannel = *(serialDecoded + 1);
+  memcpy(persistentData.nowKey, serialDecoded + 2, 16);
+  EEPROM.put(0, persistentData);
+  EEPROM.commit();
+
+  // TODO: Check return values and cascade to Host?
+
+  // Reply
+  memset((void*)serialDecoded + offset, 0x83, 1);                 // Reply to 0x03 command
+  offset += 1;
+  memset((void*)serialDecoded + offset, 0, 1);                    // 0x00 = all good
+  offset += 1;
+  
+  encodeAndSendReplyToHost(offset);
+}
+
+void cmd_confName() {
+  size_t offset = 0;
+
+  // Save the new values
+  memcpy(persistentData.networkName, serialDecoded + 1, 20);
+  EEPROM.put(0, persistentData);
+  EEPROM.commit();
+
+  // TODO: Check return values and cascade to Host?
+
+  // Reply
+  memset((void*)serialDecoded + offset, 0x84, 1);                 // Reply to 0x04 command
+  offset += 1;
+  memset((void*)serialDecoded + offset, 0, 1);                    // 0x00 = all good
+  offset += 1;
+  
+  encodeAndSendReplyToHost(offset);
+}
+
+void cmd_startScan() {
+  // TODO! For the moment, report unsupported command
+  memset((void*)serialDecoded + 0, 0xff, 1);
+  memset((void*)serialDecoded + 1, 0xff, 1);
+  memset((void*)serialDecoded + 2, 0x00, 1);
+  encodeAndSendReplyToHost(3);
+}
+
+void cmd_reportScan() {
+  // TODO! For the moment, report unsupported command
+  memset((void*)serialDecoded + 0, 0xff, 1);
+  memset((void*)serialDecoded + 1, 0xff, 1);
+  memset((void*)serialDecoded + 2, 0x00, 1);
+  encodeAndSendReplyToHost(3);  
+}
+
+void cmd_setDmx() {
+  uint8_t universeId = 0;
+
+  memset((void*)serialDecoded + 0, 0xa1, 1);                       // Reply to 0x21 command
+  
+  universeId = *(serialDecoded + 1);
+  if (universeId >= DMX_UNIVERSES) {
+    // Out of range
+    memset((void*)serialDecoded + 1, 0x81, 1);                     // Signal an error
+    memset((void*)serialDecoded + 2, 0x00, 1);
+    encodeAndSendReplyToHost(3);
+    return;
+  }
+
+  // Copy the current frame to the previous frame data
+  memcpy(dmxPrevBuf[universeId], dmxBuf[universeId], 512);
+
+  // Copy the new data to the current frame
+  memcpy(dmxBuf[universeId], serialDecoded + 2, 512);
+
+  memset((void*)serialDecoded + 1, 0x00, 1);                       // All okay
+  memset((void*)serialDecoded + 2, 0x00, 1);
+  encodeAndSendReplyToHost(3);
+
+  // TODO: Process DMX data and send update to NOW slaves
+}
+
+
 // ========================================
 // ===== Loop =============================
 // ========================================
-
 
 void loop() {
   size_t readLength = 0;
@@ -250,12 +356,32 @@ void loop() {
         cmd_ping();
         break;  
 
+      case 0x03:
+        cmd_confNow();
+        break;
+
+      case 0x04:
+        cmd_confName();
+        break;
+
+      case 0x11:
+        cmd_startScan();
+        break;
+
+      case 0x12:
+        cmd_reportScan();
+        break;
+
+      case 0x21:
+        cmd_setDmx();
+        break;      
+
       default:
         commandKnown = 0;
-        Serial.write(0xff);
-        Serial.write(0xff);
-        Serial.write(0x00);
-        Serial.flush();
+        memset((void*)serialDecoded + 0, 0xff, 1);
+        memset((void*)serialDecoded + 1, 0xff, 1);
+        memset((void*)serialDecoded + 2, 0x00, 1);
+        encodeAndSendReplyToHost(3);
         break;
     }
 
@@ -263,32 +389,6 @@ void loop() {
       commandCount++;
     }
   }
-  /*
-  if ((available > 0) && (loopCount <= 100)) {
-    packetCount++;
-    loopCount++;
-    memset(dataIn, 0, 8);
-    Serial.readBytes(dataIn, 3);
-
-    if (dataIn[0] == 0x43 && dataIn[1] == 0x3f) {
-      memset(dmxBuf, 0, 512);
-      line1 = String("Running ...");
-    } else if (dataIn[0] == 0xe2) {
-      dmxBuf[(uint16_t)dataIn[1]] = dataIn[2];
-    } else if (dataIn[0] == 0xe3) {
-      dmxBuf[(uint16_t)((uint16_t)dataIn[1] + (uint16_t)256)] = dataIn[2];
-    }
-
-    //line2.reserve(30);
-    //sprintf((char*)line2.c_str(), "%02x%02x%02x%02x%02x%02x%02x%02x", dataIn[0], dataIn[1], dataIn[2], dataIn[3], dataIn[4], dataIn[5], dataIn[6], dataIn[7]);
-
-    available = Serial.available();
-  }
-  loopCount = 0;
-
-  // Compress the dmxBuffer
-  compressDmxBuf();
-  */
 
   printLCD();
 }
