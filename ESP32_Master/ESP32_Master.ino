@@ -6,7 +6,8 @@
 
 #include <WiFi.h>
 
-//#include "b64/cdecode.h"
+#include "cdecode.c"
+#include "cencode.c"
 
 #include "heatshrink_encoder.c"
 
@@ -14,7 +15,9 @@
 uint64_t chipid;
 static char deviceid[21];
 
-static uint8_t serialDataIn[1024];
+// Input + Output buffer
+static uint8_t serialData[1024];
+static uint8_t serialDecoded[770];
 
 #define DMX_UNIVERSES 4
 
@@ -42,6 +45,10 @@ uint8_t spinner = 0;
 
 // Counts the incoming commands from HOST
 uint16_t commandCount = 0;
+
+// Statically allocated Base64 contexts
+base64_decodestate b64dec;
+base64_encodestate b64enc;
 
 // Statically allocated heatshrink encoder
 heatshrink_encoder hse;
@@ -120,16 +127,45 @@ void printLCD() {
   u8g2.sendBuffer();
 }
 
+void encodeAndSendReplyToHost(size_t length_in) {
+  size_t sendSize = 0;
+  
+  base64_init_encodestate(&b64enc);
+  sendSize += base64_encode_block((const char*)serialDecoded, length_in, (char*)serialData, &b64enc);
+  sendSize += base64_encode_blockend((char*)serialData, &b64enc);
+  sendSize++;
+  serialData[sendSize] = 0; // Terminate with a NULL-byte
+  Serial.write(serialData, sendSize);
+  Serial.flush();
+}
+
 // ========================================
-// ===== Events============================
+// ===== Command Handlers==================
 // ========================================
 
+// INIT
+void cmd_01() {
+  // Clear all buffers
+  memset(dmxBuf, 0, 512 * DMX_UNIVERSES);
+  memset(dmxPrevBuf, 0, 512 * DMX_UNIVERSES);
+  spinner = 0;
+  commandCount = 0;
 
-void serialEvent() {
-  spinner++;
-  size_t readLength = 0;
+  // Read host name and save it
+  memset((void*)line1.c_str(), 0, 25);
+  memcpy((void*)line1.c_str(), serialDecoded + 2, 20);
 
-  readLength = Serial.readBytesUntil('\0', (char*)serialDataIn, 1024);
+  // Reply
+  sprintf((char*)serialDecoded, "00.00.00\x00\x0b\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00MyCoolNetwork       ");
+  /*
+  Serial.write("00.00.00"); // FW version
+  Serial.write(0);          // Protocol version
+  Serial.write(11);         // NOW channel
+  Serial.write(dmxBuf[0], 16); // NOW Key
+  Serial.write(&chipid, 8); // Unique device ID
+  Serial.write("MyCoolNetwork       "); // Network name
+  */
+  encodeAndSendReplyToHost(54);
 }
 
 // ========================================
@@ -138,6 +174,47 @@ void serialEvent() {
 
 
 void loop() {
+  size_t readLength = 0;
+  size_t decodedLength = 0;
+  int commandKnown = 1;
+
+  readLength = Serial.readBytesUntil('\0', (char*)serialData, 1024);
+
+  if (readLength > 0) {
+    spinner++;
+    commandKnown = 1;
+
+    // Decode base64
+    memset(serialDecoded, 0, 770);
+    base64_init_decodestate(&b64dec);
+    decodedLength = base64_decode_block((const char*)serialData, readLength, (char*)serialDecoded, &b64dec);
+  
+    // DEBUG
+    memset((void*)line3.c_str(), 0, 25);
+    memset((void*)line4.c_str(), 0, 25);
+    sprintf((char*)line3.c_str(), "InSz: %d DecSz: %d", readLength, decodedLength);
+    sprintf((char*)line4.c_str(), "IN: %02x %02x %02x %02x %02x %02x ", serialDecoded[0], serialDecoded[1], serialDecoded[2], serialDecoded[3], serialDecoded[4], serialDecoded[5]);
+    // /DEBUG
+
+    switch (serialDecoded[0]) {
+      case 0x01:
+        // INIT
+        cmd_01();
+        break;
+
+      default:
+        commandKnown = 0;
+        Serial.write(0xff);
+        Serial.write(0xff);
+        Serial.write(0x00);
+        Serial.flush();
+        break;
+    }
+
+    if (commandKnown) {
+      commandCount++;
+    }
+  }
   /*
   if ((available > 0) && (loopCount <= 100)) {
     packetCount++;
