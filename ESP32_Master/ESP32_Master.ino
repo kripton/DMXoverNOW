@@ -5,23 +5,31 @@
 #include <esp_system.h>
 
 #include <WiFi.h>
-#include <HTTPClient.h>
-#include "ArduinoJson.h"
+
+//#include "b64/cdecode.h"
 
 #include "heatshrink_encoder.c"
-#include "heatshrink_decoder.c"
 
+// Unique device identification
 uint64_t chipid;
 static char deviceid[21];
 
-static char dataIn[8];
+static uint8_t serialDataIn[1024];
 
-static char dmxBuf[515];
-static char dmxCompBuf[700];
-static char dmxReBuf[512];
+#define DMX_UNIVERSES 4
 
+// Stores the latest values of all universes
+static uint8_t dmxBuf[DMX_UNIVERSES][512];
+// Stores the previous values of all universes for diff calculation
+static uint8_t dmxPrevBuf[DMX_UNIVERSES][512];
+
+// Stores one complete dmx universe in compressed form
+static uint8_t dmxCompBuf[600];
+
+// Instance to talk to our OLED
 U8G2_SSD1306_128X64_NONAME_F_SW_I2C u8g2(U8G2_R0, /* clock=*/ 15, /* data=*/ 4, /* reset=*/ 16);
 
+// Display content
 String line1 = String("");
 String line2 = String("");
 String line3 = String("");
@@ -29,34 +37,35 @@ String line4 = String("");
 String line5 = String("");
 String line6 = String("");
 
-int packetCount = 0;
+// Counts the incoming commands from HOST
+uint16_t commandCount = 0;
 
+// Statically allocated heatshrink encoder
 heatshrink_encoder hse;
-heatshrink_decoder hsd;
 
 void setup() {
   chipid = ESP.getEfuseMac();
   sprintf(deviceid, "%" PRIu64, chipid);
 
-  //Initialize serial and wait for port to open:
+  //Initialize serial and wait for port to open
   Serial.begin(921600);
   while (!Serial) {
     ; // wait for serial port to connect. Needed for native USB port only
   }
-  Serial.setTimeout(3);
+
+  // 10ms should be about 1152 byte at 921600 bit/s
+  Serial.setTimeout(10);
 
   u8g2.initDisplay();
   u8g2.setPowerSave(0);
 
-  line1 = String("Waiting for init ...");
+  line1 = String("Waiting for Init ...");
   printLCD();
 }
 
 void compressDmxBuf() {
   heatshrink_encoder_reset(&hse);
-  heatshrink_decoder_reset(&hsd);
-  memset(dmxCompBuf, 0, 700);
-  memset(dmxReBuf, 0, 512);
+  memset(dmxCompBuf, 0, 600);
 
   // Compresssion
   size_t sizeSunk = 0;
@@ -65,20 +74,12 @@ void compressDmxBuf() {
   heatshrink_encoder_finish(&hse);
   
   size_t polled = 0;
-  int poll_res = heatshrink_encoder_poll(&hse, (uint8_t*)dmxCompBuf, 700, &polled);
-
-  // Decompression
-  sink_res = heatshrink_decoder_sink(&hsd, (uint8_t*)dmxCompBuf, polled, &sizeSunk);
-  heatshrink_decoder_finish(&hsd);
-  size_t polled2 = 0;
-  poll_res = heatshrink_decoder_poll(&hsd,(uint8_t*)dmxReBuf, 512, &polled2);
-
-  line3 = String("CSZ") + String(polled) + String(" Sk") + String(sizeSunk) + String(" ReS") + String(polled2);
+  int poll_res = heatshrink_encoder_poll(&hse, (uint8_t*)dmxCompBuf, 600, &polled);
 
 }
 
 void printLCD() {
-  line2 = String("Packets: ") + String(packetCount);
+  line2 = String("Commands: ") + String(commandCount);
 
 /*
   line4.reserve(30);
@@ -91,10 +92,10 @@ void printLCD() {
 
   line4.reserve(30);
   sprintf((char*)line4.c_str(), "%02x%02x%02x%02x %02x%02x%02x%02x", dmxBuf[0], dmxBuf[1], dmxBuf[2], dmxBuf[3], dmxBuf[508], dmxBuf[509], dmxBuf[510], dmxBuf[511]);
-  line5.reserve(30);
-  sprintf((char*)line5.c_str(), "%02x%02x%02x%02x%02x%02x%02x%02x", dmxCompBuf[0], dmxCompBuf[1], dmxCompBuf[2], dmxCompBuf[3], dmxCompBuf[4], dmxCompBuf[5], dmxCompBuf[6], dmxCompBuf[7]);
-  line6.reserve(30);
-  sprintf((char*)line6.c_str(), "%02x%02x%02x%02x %02x%02x%02x%02x", dmxReBuf[0], dmxReBuf[1], dmxReBuf[2], dmxReBuf[3], dmxReBuf[508], dmxReBuf[509], dmxReBuf[510], dmxReBuf[511]);
+  //line5.reserve(30);
+  //sprintf((char*)line5.c_str(), "%02x%02x%02x%02x%02x%02x%02x%02x", dmxCompBuf[0], dmxCompBuf[1], dmxCompBuf[2], dmxCompBuf[3], dmxCompBuf[4], dmxCompBuf[5], dmxCompBuf[6], dmxCompBuf[7]);
+  //line6.reserve(30);
+  //sprintf((char*)line6.c_str(), "%02x%02x%02x%02x %02x%02x%02x%02x", dmxReBuf[0], dmxReBuf[1], dmxReBuf[2], dmxReBuf[3], dmxReBuf[508], dmxReBuf[509], dmxReBuf[510], dmxReBuf[511]);
   
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
@@ -107,11 +108,16 @@ void printLCD() {
   u8g2.sendBuffer();
 }
 
+void serialEvent() {
+  size_t readLength = 0;
+
+  readLength = Serial.readBytesUntil('\0', (char*)&serialDataIn, 1024);
+}
+
+
 void loop() {
-  // send data only when you receive data:
-  int available = Serial.available();
-  int loopCount = 0;
-  while ((available > 0) && (loopCount <= 100)) {
+  /*
+  if ((available > 0) && (loopCount <= 100)) {
     packetCount++;
     loopCount++;
     memset(dataIn, 0, 8);
@@ -135,6 +141,6 @@ void loop() {
 
   // Compress the dmxBuffer
   compressDmxBuf();
-  
+  */
   printLCD();
 }
