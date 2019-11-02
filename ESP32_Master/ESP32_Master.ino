@@ -246,7 +246,7 @@ void cmd_confNow() {
   EEPROM.put(0, persistentData);
   EEPROM.commit();
 
-  // TODO: Check return values and cascade to Host?
+  // TODO: Check return values and signal EEPROM errors to Host?
 
   // Reply
   memset((void*)serialDecoded + offset, 0x83, 1);                 // Reply to 0x03 command
@@ -265,7 +265,7 @@ void cmd_confName() {
   EEPROM.put(0, persistentData);
   EEPROM.commit();
 
-  // TODO: Check return values and cascade to Host?
+  // TODO: Check return values and signal EEPROM errors to Host?
 
   // Reply
   memset((void*)serialDecoded + offset, 0x84, 1);                 // Reply to 0x04 command
@@ -280,16 +280,14 @@ void cmd_startScan() {
   // TODO! For the moment, report unsupported command
   memset((void*)serialDecoded + 0, 0xff, 1);
   memset((void*)serialDecoded + 1, 0xff, 1);
-  memset((void*)serialDecoded + 2, 0x00, 1);
-  encodeAndSendReplyToHost(3);
+  encodeAndSendReplyToHost(2);
 }
 
 void cmd_reportScan() {
   // TODO! For the moment, report unsupported command
   memset((void*)serialDecoded + 0, 0xff, 1);
   memset((void*)serialDecoded + 1, 0xff, 1);
-  memset((void*)serialDecoded + 2, 0x00, 1);
-  encodeAndSendReplyToHost(3);  
+  encodeAndSendReplyToHost(2);
 }
 
 void cmd_setDmx() {
@@ -301,8 +299,7 @@ void cmd_setDmx() {
   if (universeId >= DMX_UNIVERSES) {
     // Out of range
     memset((void*)serialDecoded + 1, 0x81, 1);                     // Signal an error
-    memset((void*)serialDecoded + 2, 0x00, 1);
-    encodeAndSendReplyToHost(3);
+    encodeAndSendReplyToHost(2);
     return;
   }
 
@@ -313,8 +310,7 @@ void cmd_setDmx() {
   memcpy(dmxBuf[universeId], serialDecoded + 2, 512);
 
   memset((void*)serialDecoded + 1, 0x00, 1);                       // All okay
-  memset((void*)serialDecoded + 2, 0x00, 1);
-  encodeAndSendReplyToHost(3);
+  encodeAndSendReplyToHost(2);
 
   // TODO: Process DMX data and send update to NOW slaves
 }
@@ -380,8 +376,7 @@ void loop() {
         commandKnown = 0;
         memset((void*)serialDecoded + 0, 0xff, 1);
         memset((void*)serialDecoded + 1, 0xff, 1);
-        memset((void*)serialDecoded + 2, 0x00, 1);
-        encodeAndSendReplyToHost(3);
+        encodeAndSendReplyToHost(2);
         break;
     }
 
