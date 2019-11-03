@@ -292,7 +292,7 @@ static void uart_event_task (void* pvParameters) {
           //sprintf((char*)line4.c_str(), "UART_FRAME_ERR");
           break;
         case UART_PATTERN_DET:
-          readLength = uart_read_bytes(EX_UART_NUM, serialData + readLength, BUF_SIZE - readLength, 10 / portTICK_RATE_MS);
+          readLength = uart_read_bytes(EX_UART_NUM, serialData, BUF_SIZE, 10 / portTICK_RATE_MS);
           //sprintf((char*)line4.c_str(), "UART_PATTERN_DET %d", readLength);
           handleSerialData(readLength);
           break;
