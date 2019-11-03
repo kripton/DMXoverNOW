@@ -9,6 +9,13 @@
 // System stuff (unique Id, reboot reason, ...)
 #include <esp_system.h>
 
+// Low-Level serial driver
+#include "driver/uart.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
+#define EX_UART_NUM UART_NUM_0
+#define BUF_SIZE (1024)
+
 // Persistent data storage
 #include <EEPROM.h>
 
@@ -19,13 +26,13 @@
 // Data compression
 #include "heatshrink_encoder.c"
 
-// Number of supported DMX universes
-#define DMX_UNIVERSES 4
-
 
 // ========================================
 // ===== GLOBALS ==========================
 // ========================================
+
+// Number of supported DMX universes
+#define DMX_UNIVERSES 4
 
 // Unique device identification
 uint64_t chipid;
@@ -40,6 +47,7 @@ struct PersistentData {
 } persistentData, defaultData;
 
 // Serial Input + Output buffer
+static QueueHandle_t uart0_queue;
 static uint8_t serialData[1024];
 static uint8_t serialDecoded[770];
 
@@ -92,7 +100,7 @@ void setup() {
   line5.reserve(25);
   line6.reserve(25);
 
-  sprintf((char*)line1.c_str(), "Loading ...       %02d", esp_reset_reason());
+  sprintf((char*)line1.c_str(), "Loading ...        %02d", esp_reset_reason());
   printLCD();
 
   // Device init
@@ -100,18 +108,26 @@ void setup() {
   sprintf(deviceid, "%" PRIu64, chipid);
 
   //Initialize serial and wait for port to open
-  Serial.begin(921600);
-  while (!Serial) {
-    ; // wait for serial port to connect. Needed for native USB port only
-  }
+  uart_config_t uart_config = {
+    .baud_rate   =   921600,
+    .data_bits   =   UART_DATA_8_BITS,
+    .parity      =   UART_PARITY_DISABLE,
+    .stop_bits   =   UART_STOP_BITS_1,
+    .flow_ctrl   =   UART_HW_FLOWCTRL_DISABLE
+  };
+  uart_param_config(EX_UART_NUM, &uart_config);
+  uart_driver_install(EX_UART_NUM, BUF_SIZE * 2, BUF_SIZE * 2, 10, &uart0_queue, 0);
+  uart_enable_pattern_det_intr(EX_UART_NUM, 0, 1, 10000, 10, 10);
 
-  // 10ms should be about 1152 byte at 921600 bit/s
-  Serial.setTimeout(10);
+  xTaskCreate(uart_event_task, "uart_event_task", 2048, NULL, 12, NULL);
+  //xTaskCreatePinnedToCore(uart_event_task,"uart_event_task", 10000, NULL, 1, NULL, 0);
+
 
   // Read persistent settings (NOW channel, NOW key and network name)
   EEPROM.begin(sizeof(PersistentData));
   // Read the EEPROM to one of the two struct instances
   EEPROM.get(0, persistentData);
+  delay(500);
   if (persistentData.magic != 0xdeadbeef) {
     // EEPROM data is invalid, write the defaults
     memcpy((void*)&persistentData, (const void*)&defaultData, sizeof(PersistentData));
@@ -174,14 +190,18 @@ void printLCD() {
 
 void encodeAndSendReplyToHost(size_t length_in) {
   size_t sendSize = 0;
-  
+
+  // Encode the data to be sent as Bse64
   base64_init_encodestate(&b64enc);
   sendSize += base64_encode_block((const char*)serialDecoded, length_in, (char*)serialData, &b64enc);
   sendSize += base64_encode_blockend((char*)(serialData + sendSize), &b64enc);
+
+  // Terminate it with a NULL-byte
   sendSize++;
-  serialData[sendSize] = 0; // Terminate with a NULL-byte
-  Serial.write(serialData, sendSize);
-  Serial.flush();
+  serialData[sendSize] = 0;
+
+  // And send it
+  uart_write_bytes(UART_NUM_0, (const char*)serialData, sendSize);
 }
 
 
@@ -322,11 +342,12 @@ void cmd_setDmx() {
 // ========================================
 
 void loop() {
-  size_t readLength = 0;
+  printLCD();
+}
+
+void handleSerialData(size_t readLength) {
   size_t decodedLength = 0;
   int commandKnown = 1;
-
-  readLength = Serial.readBytesUntil('\0', (char*)serialData, 1024);
 
   if (readLength > 0) {
     spinner++;
@@ -336,7 +357,7 @@ void loop() {
     memset(serialDecoded, 0, 770);
     base64_init_decodestate(&b64dec);
     decodedLength = base64_decode_block((const char*)serialData, readLength, (char*)serialDecoded, &b64dec);
-  
+
     // DEBUG
     memset((void*)line4.c_str(), 0, 25);
     memset((void*)line5.c_str(), 0, 25);
@@ -385,6 +406,47 @@ void loop() {
       commandCount++;
     }
   }
-
-  printLCD();
 }
+
+static void uart_event_task (void* pvParameters) {
+  uart_event_t event;
+  size_t readLength = 0;
+
+  while (1) {
+    if (xQueueReceive(uart0_queue, (void*) &event, (portTickType)portMAX_DELAY)) {
+
+      switch (event.type) {
+        case UART_DATA:
+          break;
+        case UART_FIFO_OVF:
+          //sprintf((char*)line4.c_str(), "UART_FIFO_OVF");
+          uart_flush(EX_UART_NUM);
+          break;
+        case UART_BUFFER_FULL:
+          //sprintf((char*)line4.c_str(), "UART_BUFFER_FULL");
+          uart_flush(EX_UART_NUM);
+          break;
+        case UART_BREAK:
+          //sprintf((char*)line4.c_str(), "UART_BREAK");
+          break;
+        case UART_PARITY_ERR:
+          //sprintf((char*)line4.c_str(), "UART_PARITY_ERR");
+          break;
+        case UART_FRAME_ERR:
+          //sprintf((char*)line4.c_str(), "UART_FRAME_ERR");
+          break;
+        case UART_PATTERN_DET:
+          readLength = uart_read_bytes(EX_UART_NUM, serialData + readLength, BUF_SIZE - readLength, 10 / portTICK_RATE_MS);
+          //sprintf((char*)line4.c_str(), "UART_PATTERN_DET %d", readLength);
+          handleSerialData(readLength);
+          break;
+        default:
+          break;
+      }
+
+      spinner++;
+    }
+  }
+
+  //vTaskDelete(NULL);
+ }
