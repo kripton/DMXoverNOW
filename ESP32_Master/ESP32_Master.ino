@@ -202,7 +202,8 @@ void cmd_init() {
 
   // Read host name and save it
   memset((void*)line1.c_str(), 0, 25);
-  memcpy((void*)line1.c_str(), serialDecoded + 2, 20);
+  sprintf((char*)line1.c_str(), "H: ");
+  memcpy((void*)line1.c_str() + 3, serialDecoded + 2, 16);
 
   // Reply
   memset((void*)serialDecoded + offset, 0x81, 1);                        // Reply to 0x01 command
@@ -337,10 +338,10 @@ void loop() {
     decodedLength = base64_decode_block((const char*)serialData, readLength, (char*)serialDecoded, &b64dec);
   
     // DEBUG
-    memset((void*)line3.c_str(), 0, 25);
     memset((void*)line4.c_str(), 0, 25);
-    sprintf((char*)line3.c_str(), "InSz: %d DecSz: %d", readLength, decodedLength);
-    sprintf((char*)line4.c_str(), "IN: %02x %02x %02x %02x %02x %02x ", serialDecoded[0], serialDecoded[1], serialDecoded[2], serialDecoded[3], serialDecoded[4], serialDecoded[5]);
+    memset((void*)line5.c_str(), 0, 25);
+    sprintf((char*)line4.c_str(), "InSz: %d DecSz: %d", readLength, decodedLength);
+    sprintf((char*)line5.c_str(), "IN: %02x %02x %02x %02x %02x %02x ", serialDecoded[0], serialDecoded[1], serialDecoded[2], serialDecoded[3], serialDecoded[4], serialDecoded[5]);
     // /DEBUG
 
     switch (serialDecoded[0]) {
