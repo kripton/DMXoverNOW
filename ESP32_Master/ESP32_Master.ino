@@ -40,10 +40,10 @@ static char deviceid[21];
 
 // Persistent data from and to EEPROM, including defaults
 struct PersistentData {
-  uint32_t magic = 0xdeadbeef;
+  uint32_t magic = 0xcafeaffe;
   uint8_t nowChannel = 11;
   uint8_t nowKey[16] = {39, 21, 129, 255, 12, 43, 87, 154, 143, 30, 88, 72, 11, 189, 232, 40};
-  char networkName[20] = "DMXoverNOW 00      ";
+  char networkName[16] = "DMXoverNOW 00  ";
 } persistentData, defaultData;
 
 // Serial Input + Output buffer
@@ -118,17 +118,14 @@ void setup() {
   uart_param_config(EX_UART_NUM, &uart_config);
   uart_driver_install(EX_UART_NUM, BUF_SIZE * 2, BUF_SIZE * 2, 10, &uart0_queue, 0);
   uart_enable_pattern_det_intr(EX_UART_NUM, 0, 1, 10000, 10, 10);
-
   xTaskCreate(uart_event_task, "uart_event_task", 2048, NULL, 12, NULL);
-  //xTaskCreatePinnedToCore(uart_event_task,"uart_event_task", 10000, NULL, 1, NULL, 0);
-
 
   // Read persistent settings (NOW channel, NOW key and network name)
   EEPROM.begin(sizeof(PersistentData));
   // Read the EEPROM to one of the two struct instances
   EEPROM.get(0, persistentData);
   delay(500);
-  if (persistentData.magic != 0xdeadbeef) {
+  if (persistentData.magic != defaultData.magic) {
     // EEPROM data is invalid, write the defaults
     memcpy((void*)&persistentData, (const void*)&defaultData, sizeof(PersistentData));
     EEPROM.put(0, persistentData);
@@ -204,6 +201,112 @@ void encodeAndSendReplyToHost(size_t length_in) {
   uart_write_bytes(UART_NUM_0, (const char*)serialData, sendSize);
 }
 
+void handleSerialData(size_t readLength) {
+  size_t decodedLength = 0;
+  int commandKnown = 1;
+
+  if (readLength > 0) {
+    spinner++;
+    commandKnown = 1;
+
+    // Decode base64
+    memset(serialDecoded, 0, 770);
+    base64_init_decodestate(&b64dec);
+    decodedLength = base64_decode_block((const char*)serialData, readLength, (char*)serialDecoded, &b64dec);
+
+    // DEBUG
+    memset((void*)line4.c_str(), 0, 25);
+    memset((void*)line5.c_str(), 0, 25);
+    sprintf((char*)line4.c_str(), "InSz: %d DecSz: %d", readLength, decodedLength);
+    sprintf((char*)line5.c_str(), "IN: %02x %02x %02x %02x %02x %02x ", serialDecoded[0], serialDecoded[1], serialDecoded[2], serialDecoded[3], serialDecoded[4], serialDecoded[5]);
+    // /DEBUG
+
+    switch (serialDecoded[0]) {
+      case 0x01:
+        cmd_init();
+        break;
+
+      case 0x02:
+        cmd_ping();
+        break;
+
+      case 0x03:
+        cmd_confNow();
+        break;
+
+      case 0x04:
+        cmd_confName();
+        break;
+
+      case 0x11:
+        cmd_startScan();
+        break;
+
+      case 0x12:
+        cmd_reportScan();
+        break;
+
+      case 0x21:
+        cmd_setDmx();
+        break;
+
+      default:
+        commandKnown = 0;
+        memset((void*)serialDecoded + 0, 0xff, 1);
+        memset((void*)serialDecoded + 1, 0xff, 1);
+        encodeAndSendReplyToHost(2);
+        break;
+    }
+
+    if (commandKnown) {
+      commandCount++;
+    }
+  }
+}
+
+static void uart_event_task (void* pvParameters) {
+  uart_event_t event;
+  size_t readLength = 0;
+
+  while (1) {
+    if (xQueueReceive(uart0_queue, (void*) &event, (portTickType)portMAX_DELAY)) {
+
+      switch (event.type) {
+        case UART_DATA:
+          break;
+        case UART_FIFO_OVF:
+          //sprintf((char*)line4.c_str(), "UART_FIFO_OVF");
+          uart_flush(EX_UART_NUM);
+          break;
+        case UART_BUFFER_FULL:
+          //sprintf((char*)line4.c_str(), "UART_BUFFER_FULL");
+          uart_flush(EX_UART_NUM);
+          break;
+        case UART_BREAK:
+          //sprintf((char*)line4.c_str(), "UART_BREAK");
+          break;
+        case UART_PARITY_ERR:
+          //sprintf((char*)line4.c_str(), "UART_PARITY_ERR");
+          break;
+        case UART_FRAME_ERR:
+          //sprintf((char*)line4.c_str(), "UART_FRAME_ERR");
+          break;
+        case UART_PATTERN_DET:
+          readLength = uart_read_bytes(EX_UART_NUM, serialData + readLength, BUF_SIZE - readLength, 10 / portTICK_RATE_MS);
+          //sprintf((char*)line4.c_str(), "UART_PATTERN_DET %d", readLength);
+          handleSerialData(readLength);
+          break;
+        default:
+          break;
+      }
+
+      spinner++;
+    }
+  }
+
+  //vTaskDelete(NULL);
+}
+
 
 // ========================================
 // ===== Command Handlers =================
@@ -240,8 +343,8 @@ void cmd_init() {
   offset += 16;
   memcpy((void*)serialDecoded + offset, &chipid, 8);                     // Unique device ID
   offset += 8;
-  memcpy((void*)serialDecoded + offset, persistentData.networkName, 20); // Network name
-  offset += 20;
+  memcpy((void*)serialDecoded + offset, persistentData.networkName, 16); // Network name
+  offset += 16;
   
   encodeAndSendReplyToHost(offset);
 }
@@ -282,7 +385,7 @@ void cmd_confName() {
   size_t offset = 0;
 
   // Save the new values
-  memcpy(persistentData.networkName, serialDecoded + 1, 20);
+  memcpy(persistentData.networkName, serialDecoded + 1, 16);
   EEPROM.put(0, persistentData);
   EEPROM.commit();
 
@@ -344,109 +447,3 @@ void cmd_setDmx() {
 void loop() {
   printLCD();
 }
-
-void handleSerialData(size_t readLength) {
-  size_t decodedLength = 0;
-  int commandKnown = 1;
-
-  if (readLength > 0) {
-    spinner++;
-    commandKnown = 1;
-
-    // Decode base64
-    memset(serialDecoded, 0, 770);
-    base64_init_decodestate(&b64dec);
-    decodedLength = base64_decode_block((const char*)serialData, readLength, (char*)serialDecoded, &b64dec);
-
-    // DEBUG
-    memset((void*)line4.c_str(), 0, 25);
-    memset((void*)line5.c_str(), 0, 25);
-    sprintf((char*)line4.c_str(), "InSz: %d DecSz: %d", readLength, decodedLength);
-    sprintf((char*)line5.c_str(), "IN: %02x %02x %02x %02x %02x %02x ", serialDecoded[0], serialDecoded[1], serialDecoded[2], serialDecoded[3], serialDecoded[4], serialDecoded[5]);
-    // /DEBUG
-
-    switch (serialDecoded[0]) {
-      case 0x01:
-        cmd_init();
-        break;
-
-      case 0x02:
-        cmd_ping();
-        break;  
-
-      case 0x03:
-        cmd_confNow();
-        break;
-
-      case 0x04:
-        cmd_confName();
-        break;
-
-      case 0x11:
-        cmd_startScan();
-        break;
-
-      case 0x12:
-        cmd_reportScan();
-        break;
-
-      case 0x21:
-        cmd_setDmx();
-        break;      
-
-      default:
-        commandKnown = 0;
-        memset((void*)serialDecoded + 0, 0xff, 1);
-        memset((void*)serialDecoded + 1, 0xff, 1);
-        encodeAndSendReplyToHost(2);
-        break;
-    }
-
-    if (commandKnown) {
-      commandCount++;
-    }
-  }
-}
-
-static void uart_event_task (void* pvParameters) {
-  uart_event_t event;
-  size_t readLength = 0;
-
-  while (1) {
-    if (xQueueReceive(uart0_queue, (void*) &event, (portTickType)portMAX_DELAY)) {
-
-      switch (event.type) {
-        case UART_DATA:
-          break;
-        case UART_FIFO_OVF:
-          //sprintf((char*)line4.c_str(), "UART_FIFO_OVF");
-          uart_flush(EX_UART_NUM);
-          break;
-        case UART_BUFFER_FULL:
-          //sprintf((char*)line4.c_str(), "UART_BUFFER_FULL");
-          uart_flush(EX_UART_NUM);
-          break;
-        case UART_BREAK:
-          //sprintf((char*)line4.c_str(), "UART_BREAK");
-          break;
-        case UART_PARITY_ERR:
-          //sprintf((char*)line4.c_str(), "UART_PARITY_ERR");
-          break;
-        case UART_FRAME_ERR:
-          //sprintf((char*)line4.c_str(), "UART_FRAME_ERR");
-          break;
-        case UART_PATTERN_DET:
-          readLength = uart_read_bytes(EX_UART_NUM, serialData + readLength, BUF_SIZE - readLength, 10 / portTICK_RATE_MS);
-          //sprintf((char*)line4.c_str(), "UART_PATTERN_DET %d", readLength);
-          handleSerialData(readLength);
-          break;
-        default:
-          break;
-      }
-
-      spinner++;
-    }
-  }
-
-  //vTaskDelete(NULL);
- }
