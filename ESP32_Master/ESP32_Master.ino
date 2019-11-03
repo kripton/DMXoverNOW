@@ -159,7 +159,7 @@ void printLCD() {
   sprintf((char*)line3.c_str(), "Commands: %05x     %c", commandCount, getSpinner());
 
 
-  sprintf((char*)line6.c_str(), "%02x%02x%02x%02x%02x%02x %02x%02x%02x%02x", dmxBuf[0][0], dmxBuf[0][1], dmxBuf[0][2], dmxBuf[0][3], dmxBuf[0][4], dmxBuf[0][5], dmxBuf[0][6], dmxBuf[0][7], dmxBuf[0][8], dmxBuf[0][9]);
+  sprintf((char*)line6.c_str(), "%02x%02x%02x%02x%02x%02x %02x%02x%02x%02x", dmxBuf[0][0], dmxBuf[0][1], dmxBuf[0][2], dmxBuf[0][3], dmxBuf[0][4], dmxBuf[0][5], dmxBuf[0][508], dmxBuf[0][509], dmxBuf[0][510], dmxBuf[0][511]);
 
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
