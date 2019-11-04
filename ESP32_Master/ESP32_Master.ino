@@ -9,6 +9,10 @@
 // System stuff (unique Id, reboot reason, ...)
 #include <esp_system.h>
 
+// WiFI and ESP-NOW
+#include <esp_now.h>
+#include <WiFi.h>
+
 // Low-Level serial driver
 #include "driver/uart.h"
 #include "freertos/queue.h"
@@ -33,6 +37,9 @@
 
 // Number of supported DMX universes
 #define DMX_UNIVERSES 4
+
+// How many entries our send-queue will be able to hold
+#define SEND_QUEUE_SIZE 4*DMX_UNIVERSES
 
 // Unique device identification
 uint64_t chipid;
@@ -84,6 +91,20 @@ base64_encodestate b64enc;
 // Statically allocated heatshrink encoder
 heatshrink_encoder hse;
 
+// Global copy of slave / peer device 
+// for broadcasts the addr needs to be ff:ff:ff:ff:ff:ff
+// all devices on the same channel
+esp_now_peer_info_t slaves;
+
+static uint8_t broadcast_mac[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+
+struct SendQueueElem {
+  uint8_t toBeSent = 0;
+  uint8_t size = 0;
+  uint8_t data[250];
+};
+
+SendQueueElem sendQueue[SEND_QUEUE_SIZE];
 
 // ========================================
 // ===== SETUP ============================
@@ -131,6 +152,35 @@ void setup() {
     EEPROM.put(0, persistentData);
     EEPROM.commit();
   }
+
+  // Set-up ESP-NOW with broadcasting
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+
+  memset(sendQueue, 0, SEND_QUEUE_SIZE*sizeof(SendQueueElem));
+  
+  if (esp_now_init() == ESP_OK) {
+    memset((void*)line4.c_str(), 0, 25);
+    sprintf((char*)line4.c_str(), "ESP-NOW Init OK");
+  } else {
+    memset((void*)line4.c_str(), 0, 25);
+    sprintf((char*)line4.c_str(), "ESP-NOW Init Failed");
+  }
+
+  slaves.channel = persistentData.nowChannel;
+  memset(slaves.peer_addr, 0xff, 6);
+  slaves.ifidx = ESP_IF_WIFI_STA;
+  slaves.encrypt = false;
+  if (esp_now_add_peer(&slaves) == ESP_OK) {
+    memset((void*)line4.c_str(), 0, 25);
+    sprintf((char*)line4.c_str(), "ESP-NOW add_peer OK");
+  } else {
+    memset((void*)line4.c_str(), 0, 25);
+    sprintf((char*)line4.c_str(), "ESP-NOW add_peer Failed");
+  }
+
+  esp_now_register_recv_cb(msg_recv_cb);
+  esp_now_register_send_cb(msg_send_cb);
 
   sprintf((char*)line1.c_str(), "Awaiting Init ...  %02d", esp_reset_reason());
   printLCD();
@@ -214,12 +264,12 @@ void handleSerialData(size_t readLength) {
     base64_init_decodestate(&b64dec);
     decodedLength = base64_decode_block((const char*)serialData, readLength, (char*)serialDecoded, &b64dec);
 
-    // DEBUG
-    memset((void*)line4.c_str(), 0, 25);
-    memset((void*)line5.c_str(), 0, 25);
-    sprintf((char*)line4.c_str(), "InSz: %d DecSz: %d", readLength, decodedLength);
-    sprintf((char*)line5.c_str(), "IN: %02x %02x %02x %02x %02x %02x ", serialDecoded[0], serialDecoded[1], serialDecoded[2], serialDecoded[3], serialDecoded[4], serialDecoded[5]);
-    // /DEBUG
+    //// DEBUG
+    //memset((void*)line4.c_str(), 0, 25);
+    //memset((void*)line5.c_str(), 0, 25);
+    //sprintf((char*)line4.c_str(), "InSz: %d DecSz: %d", readLength, decodedLength);
+    //sprintf((char*)line5.c_str(), "IN: %02x %02x %02x %02x %02x %02x ", serialDecoded[0], serialDecoded[1], serialDecoded[2], serialDecoded[3], serialDecoded[4], serialDecoded[5]);
+    //// /DEBUG
 
     switch (serialDecoded[0]) {
       case 0x01:
@@ -306,6 +356,89 @@ static void uart_event_task (void* pvParameters) {
 
   //vTaskDelete(NULL);
 }
+
+static void processNextSend() {
+  // Iterate through the sendQueue and trigger the first match
+  for (int i = 0; i < SEND_QUEUE_SIZE; i++) {
+    if (sendQueue[i].toBeSent) {
+      esp_now_send(broadcast_mac, sendQueue[i].data, sendQueue[i].size);
+      // Zero that element so it won't be sent again
+      memset(&(sendQueue[i]), 0, sizeof(SendQueueElem));
+      return; // Stop here. Next packet send will be triggered in the send-callback-function
+    }
+  }
+  // If control flow reaches here, the send queue has been emptied
+}
+
+static void msg_send_cb(const uint8_t* mac, esp_now_send_status_t sendStatus) {
+  switch (sendStatus)
+  {
+    case ESP_NOW_SEND_SUCCESS:
+      // Send the next packet
+      processNextSend();
+      break;
+
+    case ESP_NOW_SEND_FAIL:
+      // Empty the sendQueue
+      memset(sendQueue, 0, SEND_QUEUE_SIZE*sizeof(SendQueueElem));
+      break;
+
+    default:
+      break;
+  }
+}
+
+static void msg_recv_cb(const uint8_t *mac_addr, const uint8_t *data, int len) {
+  // On the master only needed for SCAN replies
+}
+
+static void sendDmx(uint8_t universeId) {
+  // TODO: Some magic to determine the best style to send (comp diff, raw diff, comp keyframe, raw keyframe ...)
+  // For now, we just always send the uncompressed keyframe
+
+  // TODO: Error handling (send queue full, ...)
+
+  // First part
+  for (int i = 0; i < SEND_QUEUE_SIZE; i++) {
+    if (!sendQueue[i].toBeSent) {
+      // This element is free to be filled
+      sendQueue[i].toBeSent = 1;
+      sendQueue[i].size = 1;
+      sendQueue[i].data[0] = 0x11; // uncompressed keyframe, part 1/3
+      sendQueue[i].data[0] = universeId;
+      memcpy(sendQueue[i].data + 2, dmxBuf[universeId], 171);
+      break;
+    }
+  }
+  // Second part
+  for (int i = 0; i < SEND_QUEUE_SIZE; i++) {
+    if (!sendQueue[i].toBeSent) {
+      // This element is free to be filled
+      sendQueue[i].toBeSent = 1;
+      sendQueue[i].size = 1;
+      sendQueue[i].data[0] = 0x12; // uncompressed keyframe, part 2/3
+      sendQueue[i].data[0] = universeId;
+      memcpy(sendQueue[i].data + 2, dmxBuf[universeId] + 172, 171);
+      break;
+    }
+  }
+  // Third part
+  for (int i = 0; i < SEND_QUEUE_SIZE; i++) {
+    if (!sendQueue[i].toBeSent) {
+      // This element is free to be filled
+      sendQueue[i].toBeSent = 1;
+      sendQueue[i].size = 1;
+      sendQueue[i].data[0] = 0x13; // uncompressed keyframe, part 3/3
+      sendQueue[i].data[0] = universeId;
+      memcpy(sendQueue[i].data + 2, dmxBuf[universeId] + 344, 168);
+      break;
+    }
+  }
+
+  // Trigger sending data from the sendqueue
+  processNextSend();
+}
+
 
 
 // ========================================
@@ -436,7 +569,7 @@ void cmd_setDmx() {
   memset((void*)serialDecoded + 1, 0x00, 1);                       // All okay
   encodeAndSendReplyToHost(2);
 
-  // TODO: Process DMX data and send update to NOW slaves
+  sendDmx(universeId);
 }
 
 
