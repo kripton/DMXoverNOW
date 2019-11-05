@@ -415,9 +415,9 @@ static void sendDmx(uint8_t universeId) {
     if (!sendQueue[i].toBeSent) {
       // This element is free to be filled
       sendQueue[i].toBeSent = 1;
-      sendQueue[i].size = 1;
+      sendQueue[i].size = 173;
       sendQueue[i].data[0] = 0x11; // uncompressed keyframe, part 1/3
-      sendQueue[i].data[0] = universeId;
+      sendQueue[i].data[1] = universeId;
       memcpy(sendQueue[i].data + 2, dmxBuf[universeId], 171);
       break;
     }
@@ -427,9 +427,9 @@ static void sendDmx(uint8_t universeId) {
     if (!sendQueue[i].toBeSent) {
       // This element is free to be filled
       sendQueue[i].toBeSent = 1;
-      sendQueue[i].size = 1;
+      sendQueue[i].size = 173;
       sendQueue[i].data[0] = 0x12; // uncompressed keyframe, part 2/3
-      sendQueue[i].data[0] = universeId;
+      sendQueue[i].data[1] = universeId;
       memcpy(sendQueue[i].data + 2, dmxBuf[universeId] + 172, 171);
       break;
     }
@@ -439,9 +439,9 @@ static void sendDmx(uint8_t universeId) {
     if (!sendQueue[i].toBeSent) {
       // This element is free to be filled
       sendQueue[i].toBeSent = 1;
-      sendQueue[i].size = 1;
+      sendQueue[i].size = 170;
       sendQueue[i].data[0] = 0x13; // uncompressed keyframe, part 3/3
-      sendQueue[i].data[0] = universeId;
+      sendQueue[i].data[1] = universeId;
       memcpy(sendQueue[i].data + 2, dmxBuf[universeId] + 344, 168);
       break;
     }
