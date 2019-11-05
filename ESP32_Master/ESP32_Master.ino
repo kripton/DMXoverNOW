@@ -157,6 +157,12 @@ void setup() {
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
 
+  uint8_t baseMac[6];
+  esp_read_mac(baseMac, ESP_MAC_WIFI_STA);
+  char baseMacChr[18] = {0};
+  memset((void*)line5.c_str(), 0, 25);
+  sprintf((char*)line5.c_str(), "MAC:%02X:%02X:%02X:%02X:%02X:%02X", baseMac[0], baseMac[1], baseMac[2], baseMac[3], baseMac[4], baseMac[5]);
+
   memset(sendQueue, 0, SEND_QUEUE_SIZE*sizeof(SendQueueElem));
   
   if (esp_now_init() == ESP_OK) {
@@ -173,10 +179,10 @@ void setup() {
   slaves.encrypt = false;
   if (esp_now_add_peer(&slaves) == ESP_OK) {
     memset((void*)line4.c_str(), 0, 25);
-    sprintf((char*)line4.c_str(), "ESP-NOW add_peer OK");
+    sprintf((char*)line4.c_str(), "NOW add_peer OK %d", persistentData.nowChannel);
   } else {
     memset((void*)line4.c_str(), 0, 25);
-    sprintf((char*)line4.c_str(), "ESP-NOW add_peer Failed");
+    sprintf((char*)line4.c_str(), "NOW add_peer Failed");
   }
 
   esp_now_register_recv_cb(msg_recv_cb);
@@ -368,6 +374,8 @@ static void processNextSend() {
     }
   }
   // If control flow reaches here, the send queue has been emptied
+  memset((void*)line5.c_str(), 0, 25);
+  sprintf((char*)line4.c_str(), "QUEUE EMPTY");
 }
 
 static void msg_send_cb(const uint8_t* mac, esp_now_send_status_t sendStatus) {
@@ -375,11 +383,15 @@ static void msg_send_cb(const uint8_t* mac, esp_now_send_status_t sendStatus) {
   {
     case ESP_NOW_SEND_SUCCESS:
       // Send the next packet
+      memset((void*)line4.c_str(), 0, 25);
+      sprintf((char*)line4.c_str(), "SEND_SUCCESS");
       processNextSend();
       break;
 
     case ESP_NOW_SEND_FAIL:
       // Empty the sendQueue
+      memset((void*)line4.c_str(), 0, 25);
+      sprintf((char*)line4.c_str(), "SEND_FAIL");
       memset(sendQueue, 0, SEND_QUEUE_SIZE*sizeof(SendQueueElem));
       break;
 
@@ -434,6 +446,9 @@ static void sendDmx(uint8_t universeId) {
       break;
     }
   }
+
+  memset((void*)line5.c_str(), 0, 25);
+  sprintf((char*)line4.c_str(), "QUEUE FILLED");
 
   // Trigger sending data from the sendqueue
   processNextSend();
