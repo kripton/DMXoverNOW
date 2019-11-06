@@ -410,6 +410,83 @@ static void sendDmx(uint8_t universeId) {
 
   // TODO: Error handling (send queue full, ...)
 
+  compressDmxBuf(0);
+  if (dmxCompSize <= 230) {
+    // Send only one frame
+    for (int i = 0; i < SEND_QUEUE_SIZE; i++) {
+      if (!sendQueue[i].toBeSent) {
+        // This element is free to be filled
+        sendQueue[i].toBeSent = 1;
+        sendQueue[i].size = dmxCompSize + 2;
+        sendQueue[i].data[0] = 0x14; // KeyFrame compressed 1/1
+        sendQueue[i].data[1] = universeId;
+        memcpy(sendQueue[i].data + 2, dmxCompBuf, dmxCompSize);
+        break;
+      }
+    }
+  } else if (dmxCompSize <= 460) {
+    // Send two frames
+    for (int i = 0; i < SEND_QUEUE_SIZE; i++) {
+      if (!sendQueue[i].toBeSent) {
+        // This element is free to be filled
+        sendQueue[i].toBeSent = 1;
+        sendQueue[i].size = 232;
+        sendQueue[i].data[0] = 0x15; // KeyFrame compressed 1/2
+        sendQueue[i].data[1] = universeId;
+        memcpy(sendQueue[i].data + 2, dmxCompBuf, 230);
+        break;
+      }
+    }
+    for (int i = 0; i < SEND_QUEUE_SIZE; i++) {
+      if (!sendQueue[i].toBeSent) {
+        // This element is free to be filled
+        sendQueue[i].toBeSent = 1;
+        sendQueue[i].size = dmxCompSize - 230 + 2;
+        sendQueue[i].data[0] = 0x16; // KeyFrame compressed 2/2
+        sendQueue[i].data[1] = universeId;
+        memcpy(sendQueue[i].data + 2, dmxCompBuf + 230, dmxCompSize - 230);
+        break;
+      }
+    }
+  } else {
+    // send three frames
+    for (int i = 0; i < SEND_QUEUE_SIZE; i++) {
+      if (!sendQueue[i].toBeSent) {
+        // This element is free to be filled
+        sendQueue[i].toBeSent = 1;
+        sendQueue[i].size = 232;
+        sendQueue[i].data[0] = 0x17; // KeyFrame compressed 1/3
+        sendQueue[i].data[1] = universeId;
+        memcpy(sendQueue[i].data + 2, dmxCompBuf, 230);
+        break;
+      }
+    }
+    for (int i = 0; i < SEND_QUEUE_SIZE; i++) {
+      if (!sendQueue[i].toBeSent) {
+        // This element is free to be filled
+        sendQueue[i].toBeSent = 1;
+        sendQueue[i].size = 232;
+        sendQueue[i].data[0] = 0x18; // KeyFrame compressed 2/3
+        sendQueue[i].data[1] = universeId;
+        memcpy(sendQueue[i].data + 2, dmxCompBuf + 230, 230);
+        break;
+      }
+    }
+    for (int i = 0; i < SEND_QUEUE_SIZE; i++) {
+      if (!sendQueue[i].toBeSent) {
+        // This element is free to be filled
+        sendQueue[i].toBeSent = 1;
+        sendQueue[i].size = dmxCompSize - 460 + 2;
+        sendQueue[i].data[0] = 0x19; // KeyFrame compressed 3/3
+        sendQueue[i].data[1] = universeId;
+        memcpy(sendQueue[i].data + 2, dmxCompBuf + 460, dmxCompSize - 460);
+        break;
+      }
+    }
+  }
+
+/*
+  // uncompressed, raw frame
   // First part
   for (int i = 0; i < SEND_QUEUE_SIZE; i++) {
     if (!sendQueue[i].toBeSent) {
@@ -446,6 +523,7 @@ static void sendDmx(uint8_t universeId) {
       break;
     }
   }
+*/
 
   memset((void*)line5.c_str(), 0, 25);
   sprintf((char*)line4.c_str(), "QUEUE FILLED");

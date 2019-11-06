@@ -17,7 +17,7 @@
 #include <EEPROM.h>
 
 // Data compression
-#include "heatshrink_encoder.c"
+#include "heatshrink_decoder.c"
 
 
 // ========================================
@@ -63,8 +63,8 @@ uint8_t spinner = 0;
 // Counts the incoming framed from Master
 uint16_t frameCounter = 0;
 
-// Statically allocated heatshrink encoder
-heatshrink_encoder hse;
+// Statically allocated heatshrink decoder
+heatshrink_decoder hsd;
 
 // Global copy of slave / peer device 
 // for broadcasts the addr needs to be ff:ff:ff:ff:ff:ff
@@ -149,21 +149,19 @@ void setup() {
 // ===== Helper functions==================
 // ========================================
 
-void compressDmxBuf(uint8_t universeId) {
+void unCompressDmxBuf(uint8_t universeId) {
   int sink_res = 0;
   size_t sizeSunk = 0;
   int poll_res = 0;
 
-  // Init encoder and zero output buffer
-  heatshrink_encoder_reset(&hse);
-  memset(dmxCompBuf, 0, 600);
-  dmxCompSize = 0;
+  // Init decoder and zero output buffer
+  heatshrink_decoder_reset(&hsd);
+  memset(dmxBuf[universeId], 0, 512);
 
-  // Compresssion
-  sink_res = heatshrink_encoder_sink(&hse, (uint8_t*)dmxBuf[universeId], 512, &sizeSunk);
-  heatshrink_encoder_finish(&hse);
-  
-  poll_res = heatshrink_encoder_poll(&hse, (uint8_t*)dmxCompBuf, 600, &dmxCompSize);
+  sink_res = heatshrink_decoder_sink(&hsd, (uint8_t*)dmxCompBuf, dmxCompSize, &sizeSunk);
+  heatshrink_decoder_finish(&hsd);
+  size_t polled2 = 0;
+  poll_res = heatshrink_decoder_poll(&hsd,(uint8_t*)dmxBuf[universeId], 512, &polled2);
 }
 
 char getSpinner() {
@@ -218,8 +216,53 @@ static void msg_recv_cb(const uint8_t *mac_addr, const uint8_t *data, int len) {
   sprintf((char*)line4.c_str(), "LEN:%d CMD:%02x UID:%02x", len, data[0], data[1]);
   memset((void*)line5.c_str(), 0, 25);
   sprintf((char*)line5.c_str(), "RXF:%02X:%02X:%02X:%02X:%02X:%02X", mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
-  if ((data[0] == 0x11) && (data[1] == 0)) {
-    memcpy(dmxBuf[0], data + 2, 100);
+
+  switch (data[0]) {
+    case 0x11: // KeyFrame uncompressed 1/3
+      if (data[1] == 0) {
+        memcpy(dmxBuf[0], data + 2, len - 2);
+      }
+      break;
+    case 0x12: // KeyFrame uncompressed 2/3
+      if (data[1] == 0) {
+        memcpy(dmxBuf[0] + 171, data + 2, len - 2);
+      }
+      break;
+    case 0x13: // KeyFrame uncompressed 3/3
+      if (data[1] == 0) {
+        memcpy(dmxBuf[0] + 343, data + 2, len - 2);
+      }
+      break;
+    case 0x14: // KeyFrame compressed 1/1
+      memset(dmxCompBuf, 0, 600);
+      memcpy(dmxCompBuf, data + 2, len - 2);
+      dmxCompSize = len - 2;
+      unCompressDmxBuf(data[1]);
+      break;
+    case 0x15: // KeyFrame compressed 1/2
+      memset(dmxCompBuf, 0, 600);
+      memcpy(dmxCompBuf, data + 2, len - 2);
+      dmxCompSize = len - 2;
+      break;
+    case 0x16: // KeyFrame compressed 2/2
+      memcpy(dmxCompBuf + 230, data + 2, len - 2);
+      dmxCompSize += len - 2;
+      unCompressDmxBuf(data[1]);
+      break;
+     case 0x17: // KeyFrame compressed 1/3
+      memset(dmxCompBuf, 0, 600);
+      memcpy(dmxCompBuf, data + 2, len - 2);
+      dmxCompSize = len - 2;
+      break;
+    case 0x18: // KeyFrame compressed 2/3
+      memcpy(dmxCompBuf + 230, data + 2, len - 2);
+      dmxCompSize += len - 2;
+      break;
+    case 0x19: // KeyFrame compressed 3/3
+      memcpy(dmxCompBuf + 460, data + 2, len - 2);
+      dmxCompSize += len - 2;
+      unCompressDmxBuf(data[1]);
+      break;
   }
 }
 
