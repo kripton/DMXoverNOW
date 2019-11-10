@@ -97,6 +97,9 @@ esp_now_peer_info_t slaves;
 
 static uint8_t broadcast_mac[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
+// Task to have the display refreshed by the second core
+TaskHandle_t displayTaskHandle;
+
 // ========================================
 // ===== SETUP ============================
 // ========================================
@@ -175,7 +178,15 @@ void setup() {
   esp_now_register_send_cb(msg_send_cb);
 
   sprintf((char*)line1.c_str(), "Ready         ...  %02d", esp_reset_reason());
-  printLCD();
+
+  xTaskCreatePinnedToCore(
+      displayTask, /* Function to implement the task */
+      "Display", /* Name of the task */
+      10000,  /* Stack size in words */
+      NULL,  /* Task input parameter */
+      0,  /* Priority of the task */
+      &displayTaskHandle,  /* Task handle. */
+      0); /* Core where the task should run */
 }
 
 
@@ -190,7 +201,7 @@ void unCompressDmxBuf(uint8_t universeId) {
 
   // Init decoder and zero output buffer
   heatshrink_decoder_reset(&hsd);
-  memset(dmxBuf[universeId], 0, 512);
+  //memset(dmxBuf[universeId], 0, 512);
 
   sink_res = heatshrink_decoder_sink(&hsd, (uint8_t*)dmxCompBuf, dmxCompSize, &sizeSunk);
   heatshrink_decoder_finish(&hsd);
@@ -204,6 +215,12 @@ char getSpinner() {
     case 2: return '|'; break;
     case 3: return '/'; break;
     default: return '-'; break;
+  }
+}
+
+void displayTask(void* parameter) {
+  for(;;) {
+    printLCD();
   }
 }
 
@@ -325,6 +342,9 @@ void loop() {
   writeDmx(0);
   digitalWrite(17, LOW);
 
+  // Make sure that two frames don't overlap
+  delay(2);
+
   // TODO: Move this to the second core becuase it takes ages
-  printLCD();
+  //printLCD();
 }
