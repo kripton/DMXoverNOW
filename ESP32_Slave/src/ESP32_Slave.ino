@@ -13,6 +13,13 @@
 #include <esp_now.h>
 #include <WiFi.h>
 
+// Low-Level serial driver
+#include "driver/uart.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
+#define EX_UART_NUM UART_NUM_1
+#define BUF_SIZE (1024)
+
 // Persistent data storage
 #include <EEPROM.h>
 
@@ -38,6 +45,23 @@ struct PersistentData {
   uint8_t nowKey[16] = {39, 21, 129, 255, 12, 43, 87, 154, 143, 30, 88, 72, 11, 189, 232, 40};
   char networkName[16] = "DMXoverNOW 00  ";
 } persistentData, defaultData;
+
+// Serial handler, buffer and configs
+static QueueHandle_t uart1_queue;
+uart_config_t uart_config_data = {
+  .baud_rate   =   250000,
+  .data_bits   =   UART_DATA_8_BITS,
+  .parity      =   UART_PARITY_DISABLE,
+  .stop_bits   =   UART_STOP_BITS_2,
+  .flow_ctrl   =   UART_HW_FLOWCTRL_DISABLE
+};
+uart_config_t uart_config_break = {
+  .baud_rate   =   83333,
+  .data_bits   =   UART_DATA_8_BITS,
+  .parity      =   UART_PARITY_DISABLE,
+  .stop_bits   =   UART_STOP_BITS_1,
+  .flow_ctrl   =   UART_HW_FLOWCTRL_DISABLE
+};
 
 // Stores the latest values of all universes
 static uint8_t dmxBuf[DMX_UNIVERSES][512];
@@ -94,6 +118,16 @@ void setup() {
   // Device init
   chipid = ESP.getEfuseMac();
   sprintf(deviceid, "%" PRIu64, chipid);
+
+  // Set up our serial port
+  //pinMode(13, OUTPUT);
+  uart_set_pin(EX_UART_NUM, 13, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+  //uart_driver_install(EX_UART_NUM, BUF_SIZE * 2, BUF_SIZE * 2, 10, &uart1_queue, 0);
+  uart_driver_install(EX_UART_NUM, BUF_SIZE * 2, 0, 10, &uart1_queue, 0); // No TX buffer => write calls will block
+  uart_param_config(EX_UART_NUM, &uart_config_data);
+
+  // Set up trigger output
+  pinMode(17, OUTPUT);
 
   // Read persistent settings (NOW channel, NOW key and network name)
   EEPROM.begin(sizeof(PersistentData));
@@ -175,8 +209,7 @@ char getSpinner() {
 
 void printLCD() {
   sprintf((char*)line2.c_str(), "N: %s", persistentData.networkName);
-  sprintf((char*)line3.c_str(), "Framed: %05x       %c", frameCounter, getSpinner());
-
+  sprintf((char*)line3.c_str(), "Frames: %05x       %c", frameCounter, getSpinner());
 
   sprintf((char*)line6.c_str(), "%02x%02x%02x%02x%02x%02x %02x%02x%02x%02x", dmxBuf[0][0], dmxBuf[0][1], dmxBuf[0][2], dmxBuf[0][3], dmxBuf[0][4], dmxBuf[0][5], dmxBuf[0][508], dmxBuf[0][509], dmxBuf[0][510], dmxBuf[0][511]);
 
@@ -266,11 +299,32 @@ static void msg_recv_cb(const uint8_t *mac_addr, const uint8_t *data, int len) {
   }
 }
 
+void writeDmx(uint8_t universeId) {
+  uint8_t zero = 0;
+
+  // Send BREAK
+  uart_set_line_inverse(EX_UART_NUM, UART_INVERSE_DISABLE);
+  delayMicroseconds(200);
+
+  // Send MARK_AFTER_BREAK
+  uart_set_line_inverse(EX_UART_NUM, UART_INVERSE_TXD);
+  delayMicroseconds(20);
+
+  //send data
+  uart_write_bytes(EX_UART_NUM, (const char*)&zero, 1); // start byte
+  uart_write_bytes(EX_UART_NUM, (const char*)dmxBuf[universeId], 512);
+}
+
 
 // ========================================
 // ===== Loop =============================
 // ========================================
 
 void loop() {
+  digitalWrite(17, HIGH);
+  writeDmx(0);
+  digitalWrite(17, LOW);
+
+  // TODO: Move this to the second core becuase it takes ages
   printLCD();
 }
