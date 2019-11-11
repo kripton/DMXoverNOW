@@ -117,6 +117,15 @@ uint8_t spinner = 0;
 // OR the number of incoming radio frames
 uint16_t spinCount = 0;
 
+uint8_t sizeMismatchCount = 0;
+uint8_t lastZeroCount = 0;
+uint8_t allZeroCount = 0;
+
+uint8_t frame0arrived = 0;
+uint8_t frame1arrived = 0;
+
+uint8_t droppedFrameCounter = 0;
+
 // Statically allocated Base64 contexts
 base64_decodestate b64dec;
 base64_encodestate b64enc;
@@ -284,6 +293,30 @@ void unCompressDmxBuf(uint8_t universeId) {
   heatshrink_decoder_finish(&hsd);
   size_t polled2 = 0;
   poll_res = heatshrink_decoder_poll(&hsd,(uint8_t*)dmxBuf[universeId], 512, &polled2);
+
+  if (polled2 != 512) {
+    sizeMismatchCount++;
+  }
+
+  if (dmxBuf[universeId][511] == 0) {
+    lastZeroCount++;
+  }
+
+  int allZero = true;
+  for (int i = 0; i <= 511; i++) {
+    if(dmxBuf[universeId][i] != 0) {
+      allZero = false;
+      break;
+    }
+  }
+
+  if (allZero) {
+    allZeroCount++;
+  }
+
+  memset((void*)line5.c_str(), 0, 25);
+  sprintf((char*)line5.c_str(), "%03d %02x %02x %02x %02x", polled2, sizeMismatchCount, lastZeroCount, allZeroCount, droppedFrameCounter);
+
 }
 
 char getSpinner() {
@@ -535,7 +568,7 @@ static void sendDmx(uint8_t universeId) {
   }
 */
 
-  memset((void*)line5.c_str(), 0, 25);
+  memset((void*)line4.c_str(), 0, 25);
   sprintf((char*)line4.c_str(), "QUEUE FILLED");
 
   // Trigger sending data from the sendqueue
@@ -596,7 +629,7 @@ static void processNextSend() {
     }
   }
   // If control flow reaches here, the send queue has been emptied
-  memset((void*)line5.c_str(), 0, 25);
+  memset((void*)line4.c_str(), 0, 25);
   sprintf((char*)line4.c_str(), "QUEUE EMPTY");
 }
 
@@ -606,8 +639,8 @@ static void radioRecvCB(const uint8_t *mac_addr, const uint8_t *data, int len) {
   spinCount++;
   memset((void*)line4.c_str(), 0, 25);
   sprintf((char*)line4.c_str(), "LEN:%d CMD:%02x UID:%02x", len, data[0], data[1]);
-  memset((void*)line5.c_str(), 0, 25);
-  sprintf((char*)line5.c_str(), "RXF:%02X:%02X:%02X:%02X:%02X:%02X", mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+  //memset((void*)line5.c_str(), 0, 25);
+  //sprintf((char*)line5.c_str(), "RXF:%02X:%02X:%02X:%02X:%02X:%02X", mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
 
   switch (data[0]) {
     case 0x11: // KeyFrame uncompressed 1/3
@@ -635,25 +668,45 @@ static void radioRecvCB(const uint8_t *mac_addr, const uint8_t *data, int len) {
       memset(dmxCompBuf, 0, 600);
       memcpy(dmxCompBuf, data + 2, len - 2);
       dmxCompSize = len - 2;
+      frame0arrived = 1;
+      frame1arrived = 0;
       break;
     case 0x16: // KeyFrame compressed 2/2
       memcpy(dmxCompBuf + 230, data + 2, len - 2);
       dmxCompSize += len - 2;
-      unCompressDmxBuf(data[1]);
+      if (frame0arrived && !frame1arrived) {
+        unCompressDmxBuf(data[1]);
+      } else {
+        droppedFrameCounter++;
+      }
+      frame0arrived = 0;
       break;
      case 0x17: // KeyFrame compressed 1/3
       memset(dmxCompBuf, 0, 600);
       memcpy(dmxCompBuf, data + 2, len - 2);
       dmxCompSize = len - 2;
+      frame0arrived = 1;
+      frame1arrived = 0;
       break;
     case 0x18: // KeyFrame compressed 2/3
-      memcpy(dmxCompBuf + 230, data + 2, len - 2);
-      dmxCompSize += len - 2;
+      if (frame0arrived && !frame1arrived) {
+        memcpy(dmxCompBuf + 230, data + 2, len - 2);
+        dmxCompSize += len - 2;
+        frame1arrived = 1;
+      } else {
+        droppedFrameCounter++;
+      }
       break;
     case 0x19: // KeyFrame compressed 3/3
       memcpy(dmxCompBuf + 460, data + 2, len - 2);
       dmxCompSize += len - 2;
-      unCompressDmxBuf(data[1]);
+      if (frame0arrived && frame1arrived) {
+        unCompressDmxBuf(data[1]);
+      } else {
+        droppedFrameCounter++;
+      }
+      frame0arrived = 0;
+      frame1arrived = 0;
       break;
   }
 }
