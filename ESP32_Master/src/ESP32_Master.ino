@@ -29,6 +29,7 @@
 
 // Data compression
 #include "heatshrink_encoder.c"
+#include "heatshrink_decoder.c"
 
 
 // ========================================
@@ -84,12 +85,16 @@ uint8_t spinner = 0;
 // Counts the incoming commands from HOST
 uint16_t commandCount = 0;
 
+uint8_t sizeMismatchCount = 0;
+uint8_t contMismatchCount = 0;
+
 // Statically allocated Base64 contexts
 base64_decodestate b64dec;
 base64_encodestate b64enc;
 
 // Statically allocated heatshrink encoder
 heatshrink_encoder hse;
+heatshrink_decoder hsd;
 
 // Global copy of slave / peer device 
 // for broadcasts the addr needs to be ff:ff:ff:ff:ff:ff
@@ -212,6 +217,33 @@ void compressDmxBuf(uint8_t universeId) {
   heatshrink_encoder_finish(&hse);
   
   poll_res = heatshrink_encoder_poll(&hse, (uint8_t*)dmxCompBuf, 600, &dmxCompSize);
+}
+
+void unCompressDmxBuf(uint8_t universeId) {
+  int sink_res = 0;
+  size_t sizeSunk = 0;
+  int poll_res = 0;
+
+  // Init decoder and zero output buffer
+  heatshrink_decoder_reset(&hsd);
+
+  sink_res = heatshrink_decoder_sink(&hsd, (uint8_t*)dmxCompBuf, dmxCompSize, &sizeSunk);
+  heatshrink_decoder_finish(&hsd);
+  size_t polled2 = 0;
+  poll_res = heatshrink_decoder_poll(&hsd,(uint8_t*)dmxPrevBuf[universeId], 512, &polled2);
+
+  if (polled2 != 512) {
+    sizeMismatchCount++;
+  }
+
+  memset((void*)line5.c_str(), 0, 25);
+  int cmp = memcmp((const void*)dmxBuf[universeId], (const void*)dmxPrevBuf[universeId], 512);
+
+  if (cmp != 0) {
+    contMismatchCount++;
+  }
+
+  sprintf((char*)line5.c_str(), "%03d %01x %01x", polled2, sizeMismatchCount, contMismatchCount);
 }
 
 char getSpinner() {
@@ -374,7 +406,7 @@ static void processNextSend() {
     }
   }
   // If control flow reaches here, the send queue has been emptied
-  memset((void*)line5.c_str(), 0, 25);
+  memset((void*)line4.c_str(), 0, 25);
   sprintf((char*)line4.c_str(), "QUEUE EMPTY");
 }
 
@@ -411,6 +443,8 @@ static void sendDmx(uint8_t universeId) {
   // TODO: Error handling (send queue full, ...)
 
   compressDmxBuf(0);
+  unCompressDmxBuf(0);
+
   if (dmxCompSize <= 230) {
     // Send only one frame
     for (int i = 0; i < SEND_QUEUE_SIZE; i++) {
@@ -525,7 +559,7 @@ static void sendDmx(uint8_t universeId) {
   }
 */
 
-  memset((void*)line5.c_str(), 0, 25);
+  memset((void*)line4.c_str(), 0, 25);
   sprintf((char*)line4.c_str(), "QUEUE FILLED");
 
   // Trigger sending data from the sendqueue
