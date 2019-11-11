@@ -372,7 +372,6 @@ void handleSerialData(size_t readLength) {
     //// /DEBUG
 
     switch (serialInDecoded[0]) {
-      /*
       case 0x01:
         cmd_init();
         break;
@@ -400,7 +399,6 @@ void handleSerialData(size_t readLength) {
       case 0x21:
         cmd_setDmx();
         break;
-      */
 
       default:
         commandKnown = 0;
@@ -414,6 +412,134 @@ void handleSerialData(size_t readLength) {
       spinCount++;
     }
   }
+}
+
+static void sendDmx(uint8_t universeId) {
+  // TODO: Some magic to determine the best style to send (comp diff, raw diff, comp keyframe, raw keyframe ...)
+  // For now, we just always send the uncompressed keyframe
+
+  // TODO: Error handling (send queue full, ...)
+
+  compressDmxBuf(0);
+  if (dmxCompSize <= 230) {
+    // Send only one frame
+    for (int i = 0; i < SEND_QUEUE_SIZE; i++) {
+      if (!sendQueue[i].toBeSent) {
+        // This element is free to be filled
+        sendQueue[i].toBeSent = 1;
+        sendQueue[i].size = dmxCompSize + 2;
+        sendQueue[i].data[0] = 0x14; // KeyFrame compressed 1/1
+        sendQueue[i].data[1] = universeId;
+        memcpy(sendQueue[i].data + 2, dmxCompBuf, dmxCompSize);
+        break;
+      }
+    }
+  } else if (dmxCompSize <= 460) {
+    // Send two frames
+    for (int i = 0; i < SEND_QUEUE_SIZE; i++) {
+      if (!sendQueue[i].toBeSent) {
+        // This element is free to be filled
+        sendQueue[i].toBeSent = 1;
+        sendQueue[i].size = 232;
+        sendQueue[i].data[0] = 0x15; // KeyFrame compressed 1/2
+        sendQueue[i].data[1] = universeId;
+        memcpy(sendQueue[i].data + 2, dmxCompBuf, 230);
+        break;
+      }
+    }
+    for (int i = 0; i < SEND_QUEUE_SIZE; i++) {
+      if (!sendQueue[i].toBeSent) {
+        // This element is free to be filled
+        sendQueue[i].toBeSent = 1;
+        sendQueue[i].size = dmxCompSize - 230 + 2;
+        sendQueue[i].data[0] = 0x16; // KeyFrame compressed 2/2
+        sendQueue[i].data[1] = universeId;
+        memcpy(sendQueue[i].data + 2, dmxCompBuf + 230, dmxCompSize - 230);
+        break;
+      }
+    }
+  } else {
+    // send three frames
+    for (int i = 0; i < SEND_QUEUE_SIZE; i++) {
+      if (!sendQueue[i].toBeSent) {
+        // This element is free to be filled
+        sendQueue[i].toBeSent = 1;
+        sendQueue[i].size = 232;
+        sendQueue[i].data[0] = 0x17; // KeyFrame compressed 1/3
+        sendQueue[i].data[1] = universeId;
+        memcpy(sendQueue[i].data + 2, dmxCompBuf, 230);
+        break;
+      }
+    }
+    for (int i = 0; i < SEND_QUEUE_SIZE; i++) {
+      if (!sendQueue[i].toBeSent) {
+        // This element is free to be filled
+        sendQueue[i].toBeSent = 1;
+        sendQueue[i].size = 232;
+        sendQueue[i].data[0] = 0x18; // KeyFrame compressed 2/3
+        sendQueue[i].data[1] = universeId;
+        memcpy(sendQueue[i].data + 2, dmxCompBuf + 230, 230);
+        break;
+      }
+    }
+    for (int i = 0; i < SEND_QUEUE_SIZE; i++) {
+      if (!sendQueue[i].toBeSent) {
+        // This element is free to be filled
+        sendQueue[i].toBeSent = 1;
+        sendQueue[i].size = dmxCompSize - 460 + 2;
+        sendQueue[i].data[0] = 0x19; // KeyFrame compressed 3/3
+        sendQueue[i].data[1] = universeId;
+        memcpy(sendQueue[i].data + 2, dmxCompBuf + 460, dmxCompSize - 460);
+        break;
+      }
+    }
+  }
+
+/*
+  // uncompressed, raw frame
+  // First part
+  for (int i = 0; i < SEND_QUEUE_SIZE; i++) {
+    if (!sendQueue[i].toBeSent) {
+      // This element is free to be filled
+      sendQueue[i].toBeSent = 1;
+      sendQueue[i].size = 173;
+      sendQueue[i].data[0] = 0x11; // uncompressed keyframe, part 1/3
+      sendQueue[i].data[1] = universeId;
+      memcpy(sendQueue[i].data + 2, dmxBuf[universeId], 171);
+      break;
+    }
+  }
+  // Second part
+  for (int i = 0; i < SEND_QUEUE_SIZE; i++) {
+    if (!sendQueue[i].toBeSent) {
+      // This element is free to be filled
+      sendQueue[i].toBeSent = 1;
+      sendQueue[i].size = 173;
+      sendQueue[i].data[0] = 0x12; // uncompressed keyframe, part 2/3
+      sendQueue[i].data[1] = universeId;
+      memcpy(sendQueue[i].data + 2, dmxBuf[universeId] + 172, 171);
+      break;
+    }
+  }
+  // Third part
+  for (int i = 0; i < SEND_QUEUE_SIZE; i++) {
+    if (!sendQueue[i].toBeSent) {
+      // This element is free to be filled
+      sendQueue[i].toBeSent = 1;
+      sendQueue[i].size = 170;
+      sendQueue[i].data[0] = 0x13; // uncompressed keyframe, part 3/3
+      sendQueue[i].data[1] = universeId;
+      memcpy(sendQueue[i].data + 2, dmxBuf[universeId] + 344, 168);
+      break;
+    }
+  }
+*/
+
+  memset((void*)line5.c_str(), 0, 25);
+  sprintf((char*)line4.c_str(), "QUEUE FILLED");
+
+  // Trigger sending data from the sendqueue
+  processNextSend();
 }
 
 static void uartMasterTask (void* pvParameters) {
@@ -546,6 +672,137 @@ void writeDmx(uart_port_t uartId, uint8_t* dmxBuf) {
   //send data
   uart_write_bytes(uartId, (const char*)&zero, 1); // start byte
   uart_write_bytes(uartId, (const char*)dmxBuf, 512);
+}
+
+// ========================================
+// ===== Command Handlers =================
+// ========================================
+
+void cmd_init() {
+  size_t offset = 0;
+  
+  // Clear all buffers
+  memset(dmxBuf, 0, 512 * DMX_UNIVERSES);
+  memset(dmxPrevBuf, 0, 512 * DMX_UNIVERSES);
+  memset(dmxCompBuf, 0, 600);
+  spinner = 0;
+  spinCount = 0;
+  dmxCompSize = 0;
+
+  // Read host name and save it
+  memset((void*)line1.c_str(), 0, 25);
+  sprintf((char*)line1.c_str(), "H: ");
+  memcpy((void*)line1.c_str() + 3, serialInDecoded + 2, 16);
+
+  // Reply
+  memset((void*)serialInDecoded + offset, 0x81, 1);                        // Reply to 0x01 command
+  offset += 1;
+  memset((void*)serialInDecoded + offset, 0, 1);                           // 0x00 = all good
+  offset += 1;
+  memset((void*)serialInDecoded + offset, 0, 1);                           // Protocol version
+  offset += 1;
+  sprintf((char*)serialInDecoded + offset, "00.00.00");                    // FW version
+  offset += 8;
+  memset((void*)serialInDecoded + offset, persistentData.nowChannel, 1);   // NOW channel
+  offset += 1;
+  //memcpy((void*)serialInDecoded + offset, persistentData.nowKey, 16);      // NOW master key
+  offset += 16;
+  memcpy((void*)serialInDecoded + offset, &chipid, 8);                     // Unique device ID
+  offset += 8;
+  memcpy((void*)serialInDecoded + offset, persistentData.networkName, 16); // Network name
+  offset += 16;
+  
+  encodeAndSendReplyToHost(offset);
+}
+
+void cmd_ping() {
+  size_t offset = 0;
+
+  // Reply
+  memset((void*)serialInDecoded + offset, 0x82, 1);                 // Reply to 0x02 command
+  offset += 1;
+  memset((void*)serialInDecoded + offset, 0, 1);                    // 0x00 = all good
+  offset += 1;
+  
+  encodeAndSendReplyToHost(offset);
+}
+
+void cmd_confNow() {
+  size_t offset = 0;
+
+  // Save the new values
+  persistentData.nowChannel = *(serialInDecoded + 1);
+  //memcpy(persistentData.nowKey, serialInDecoded + 2, 16);
+  EEPROM.put(0, persistentData);
+  EEPROM.commit();
+
+  // TODO: Check return values and signal EEPROM errors to Host?
+
+  // Reply
+  memset((void*)serialInDecoded + offset, 0x83, 1);                 // Reply to 0x03 command
+  offset += 1;
+  memset((void*)serialInDecoded + offset, 0, 1);                    // 0x00 = all good
+  offset += 1;
+  
+  encodeAndSendReplyToHost(offset);
+}
+
+void cmd_confName() {
+  size_t offset = 0;
+
+  // Save the new values
+  memcpy(persistentData.networkName, serialInDecoded + 1, 16);
+  EEPROM.put(0, persistentData);
+  EEPROM.commit();
+
+  // TODO: Check return values and signal EEPROM errors to Host?
+
+  // Reply
+  memset((void*)serialInDecoded + offset, 0x84, 1);                 // Reply to 0x04 command
+  offset += 1;
+  memset((void*)serialInDecoded + offset, 0, 1);                    // 0x00 = all good
+  offset += 1;
+  
+  encodeAndSendReplyToHost(offset);
+}
+
+void cmd_startScan() {
+  // TODO! For the moment, report unsupported command
+  memset((void*)serialInDecoded + 0, 0xff, 1);
+  memset((void*)serialInDecoded + 1, 0xff, 1);
+  encodeAndSendReplyToHost(2);
+}
+
+void cmd_reportScan() {
+  // TODO! For the moment, report unsupported command
+  memset((void*)serialInDecoded + 0, 0xff, 1);
+  memset((void*)serialInDecoded + 1, 0xff, 1);
+  encodeAndSendReplyToHost(2);
+}
+
+void cmd_setDmx() {
+  uint8_t universeId = 0;
+
+  memset((void*)serialInDecoded + 0, 0xa1, 1);                       // Reply to 0x21 command
+  
+  universeId = *(serialInDecoded + 1);
+  if (universeId >= DMX_UNIVERSES) {
+    // Out of range
+    memset((void*)serialInDecoded + 1, 0x81, 1);                     // Signal an error
+    encodeAndSendReplyToHost(2);
+    return;
+  }
+
+  // Copy the current frame to the previous frame data
+  memcpy(dmxPrevBuf[universeId], dmxBuf[universeId], 512);
+
+  // Copy the new data to the current frame
+  memcpy(dmxBuf[universeId], serialInDecoded + 2, 512);
+
+  memset((void*)serialInDecoded + 1, 0x00, 1);                       // All okay
+  encodeAndSendReplyToHost(2);
+
+  sendDmx(universeId);
 }
 
 
