@@ -76,11 +76,12 @@ uart_config_t uartMasteronfig = {
 
 // UART1 = DMX send 1
 static QueueHandle_t uart1Queue;
+static uint8_t serialDmx1Buffer[512];
 
 // UART2 = DMX send 2
 static QueueHandle_t uart2Queue;
+static uint8_t serialDmx2Buffer[512];
 
-static uint8_t serialDmxBuffer[520];
 uart_config_t uartDmxConfig = {
   .baud_rate   =   250000,
   .data_bits   =   UART_DATA_8_BITS,
@@ -531,7 +532,7 @@ static void radioRecvCB(const uint8_t *mac_addr, const uint8_t *data, int len) {
   }
 }
 
-void writeDmx(uart_port_t uartId) {
+void writeDmx(uart_port_t uartId, uint8_t* dmxBuf) {
   uint8_t zero = 0;
 
   // Send BREAK
@@ -544,7 +545,7 @@ void writeDmx(uart_port_t uartId) {
 
   //send data
   uart_write_bytes(uartId, (const char*)&zero, 1); // start byte
-  uart_write_bytes(uartId, (const char*)serialDmxBuffer, 512);
+  uart_write_bytes(uartId, (const char*)dmxBuf, 512);
 }
 
 
@@ -557,13 +558,13 @@ void loop() {
   // DMX1
   digitalWrite(TRIGGERHELPER, HIGH);
   // Buffer the data to avoid flickering when new data comes in while transmittinh
-  memcpy(serialDmxBuffer, dmxBuf[persistentData.universeToSend1], 512);
-  writeDmx(UART_NUM_1);
+  memcpy(serialDmx1Buffer, dmxBuf[persistentData.universeToSend1], 512);
+  writeDmx(UART_NUM_1, serialDmx1Buffer);
 
   // DMX2
   digitalWrite(TRIGGERHELPER, LOW);
   // Buffer the data to avoid flickering when new data comes in while transmittinh
-  memcpy(serialDmxBuffer, dmxBuf[persistentData.universeToSend2], 512);
-  writeDmx(UART_NUM_2);
+  memcpy(serialDmx2Buffer, dmxBuf[persistentData.universeToSend2], 512);
+  writeDmx(UART_NUM_2, serialDmx2Buffer);
 
 }
