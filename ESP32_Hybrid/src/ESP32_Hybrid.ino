@@ -517,7 +517,7 @@ static void sendDmx(uint8_t universeId) {
       sendQueue[i].size = 173;
       sendQueue[i].data[0] = 0x12; // uncompressed keyframe, part 2/3
       sendQueue[i].data[1] = universeId;
-      memcpy(sendQueue[i].data + 2, dmxBuf[universeId] + 172, 171);
+      memcpy(sendQueue[i].data + 2, dmxBuf[universeId] + 171, 171);
       break;
     }
   }
@@ -526,10 +526,10 @@ static void sendDmx(uint8_t universeId) {
     if (!sendQueue[i].toBeSent) {
       // This element is free to be filled
       sendQueue[i].toBeSent = 1;
-      sendQueue[i].size = 170;
+      sendQueue[i].size = 172;
       sendQueue[i].data[0] = 0x13; // uncompressed keyframe, part 3/3
       sendQueue[i].data[1] = universeId;
-      memcpy(sendQueue[i].data + 2, dmxBuf[universeId] + 344, 168);
+      memcpy(sendQueue[i].data + 2, dmxBuf[universeId] + 342, 170);
       break;
     }
   }
@@ -622,7 +622,7 @@ static void radioRecvCB(const uint8_t *mac_addr, const uint8_t *data, int len) {
       break;
     case 0x13: // KeyFrame uncompressed 3/3
       if (data[1] == 0) {
-        memcpy(dmxBuf[0] + 343, data + 2, len - 2);
+        memcpy(dmxBuf[0] + 342, data + 2, len - 2);
       }
       break;
     case 0x14: // KeyFrame compressed 1/1
@@ -812,6 +812,8 @@ void cmd_setDmx() {
 
 void loop() {
 
+  //esp_now_unregister_recv_cb();
+
   // DMX1
   digitalWrite(TRIGGERHELPER, HIGH);
   // Buffer the data to avoid flickering when new data comes in while transmittinh
@@ -824,4 +826,6 @@ void loop() {
   memcpy(serialDmx2Buffer, dmxBuf[persistentData.universeToSend2], 512);
   writeDmx(UART_NUM_2, serialDmx2Buffer);
 
+  //esp_now_register_recv_cb(radioRecvCB);
+  //delayMicroseconds(2300);
 }
