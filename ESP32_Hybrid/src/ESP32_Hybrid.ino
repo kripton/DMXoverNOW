@@ -76,12 +76,11 @@ uart_config_t uartMasteronfig = {
 
 // UART1 = DMX send 1
 static QueueHandle_t uart1Queue;
-static uint8_t serialDmx1Buffer[512];
 
 // UART2 = DMX send 2
 static QueueHandle_t uart2Queue;
-static uint8_t serialDmx2Buffer[512];
 
+static uint8_t serialDmxBuffer[520];
 uart_config_t uartDmxConfig = {
   .baud_rate   =   250000,
   .data_bits   =   UART_DATA_8_BITS,
@@ -175,12 +174,12 @@ void setup() {
 
   // Set up UART1 for DMX sending
   uart_set_pin(UART_NUM_1, DMX1PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-  uart_driver_install(UART_NUM_1, BUF_SIZE * 2, BUF_SIZE * 2, 10, &uart1Queue, 0);
+  uart_driver_install(UART_NUM_1, BUF_SIZE * 2, 0, 10, &uart1Queue, 0); // No TX buffer => write calls will block
   uart_param_config(UART_NUM_1, &uartDmxConfig);
 
   // Set up UART2 for DMX sending
   uart_set_pin(UART_NUM_2, DMX2PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-  uart_driver_install(UART_NUM_2, BUF_SIZE * 2, BUF_SIZE * 2, 10, &uart2Queue, 0);
+  uart_driver_install(UART_NUM_2, BUF_SIZE * 2, 0, 10, &uart2Queue, 0); // No TX buffer => write calls will block
   uart_param_config(UART_NUM_2, &uartDmxConfig);
 
   // Set up trigger output
@@ -532,7 +531,7 @@ static void radioRecvCB(const uint8_t *mac_addr, const uint8_t *data, int len) {
   }
 }
 
-void writeDmx(uart_port_t uartId, uint8_t* dmxBuf) {
+void writeDmx(uart_port_t uartId) {
   uint8_t zero = 0;
 
   // Send BREAK
@@ -545,7 +544,7 @@ void writeDmx(uart_port_t uartId, uint8_t* dmxBuf) {
 
   //send data
   uart_write_bytes(uartId, (const char*)&zero, 1); // start byte
-  uart_write_bytes(uartId, (const char*)dmxBuf, 512);
+  uart_write_bytes(uartId, (const char*)serialDmxBuffer, 512);
 }
 
 
@@ -554,19 +553,17 @@ void writeDmx(uart_port_t uartId, uint8_t* dmxBuf) {
 // ========================================
 
 void loop() {
-  digitalWrite(TRIGGERHELPER, HIGH);
 
   // DMX1
+  digitalWrite(TRIGGERHELPER, HIGH);
   // Buffer the data to avoid flickering when new data comes in while transmittinh
-  memcpy(serialDmx1Buffer, dmxBuf[persistentData.universeToSend1], 512);
-  writeDmx(UART_NUM_1, serialDmx1Buffer);
+  memcpy(serialDmxBuffer, dmxBuf[persistentData.universeToSend1], 512);
+  writeDmx(UART_NUM_1);
 
   // DMX2
-  // Buffer the data to avoid flickering when new data comes in while transmittinh
-  memcpy(serialDmx2Buffer, dmxBuf[persistentData.universeToSend2], 512);
-  writeDmx(UART_NUM_2, serialDmx2Buffer);
-
   digitalWrite(TRIGGERHELPER, LOW);
+  // Buffer the data to avoid flickering when new data comes in while transmittinh
+  memcpy(serialDmxBuffer, dmxBuf[persistentData.universeToSend2], 512);
+  writeDmx(UART_NUM_2);
 
-  delayMicroseconds(25000);
 }
