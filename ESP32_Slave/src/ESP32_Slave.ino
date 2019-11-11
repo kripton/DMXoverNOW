@@ -48,6 +48,7 @@ struct PersistentData {
 
 // Serial handler, buffer and configs
 static QueueHandle_t uart1_queue;
+static uint8_t serialBuffer[520];
 uart_config_t uart_config_data = {
   .baud_rate   =   250000,
   .data_bits   =   UART_DATA_8_BITS,
@@ -316,7 +317,7 @@ static void msg_recv_cb(const uint8_t *mac_addr, const uint8_t *data, int len) {
   }
 }
 
-void writeDmx(uint8_t universeId) {
+void writeDmx() {
   uint8_t zero = 0;
 
   // Send BREAK
@@ -329,7 +330,7 @@ void writeDmx(uint8_t universeId) {
 
   //send data
   uart_write_bytes(EX_UART_NUM, (const char*)&zero, 1); // start byte
-  uart_write_bytes(EX_UART_NUM, (const char*)dmxBuf[universeId], 512);
+  uart_write_bytes(EX_UART_NUM, (const char*)serialBuffer, 512);
 }
 
 
@@ -339,11 +340,13 @@ void writeDmx(uint8_t universeId) {
 
 void loop() {
   digitalWrite(17, HIGH);
-  writeDmx(0);
+  // Buffer the data to avoid flickering when new data comes in while transmittinh
+  memcpy(serialBuffer, dmxBuf[0], 512);
+  writeDmx();
   digitalWrite(17, LOW);
 
   // Make sure that two frames don't overlap
-  delay(2);
+  delayMicroseconds(2300);
 
   // TODO: Move this to the second core becuase it takes ages
   //printLCD();
