@@ -206,14 +206,21 @@ void compressDmxBuf(uint8_t universeId) {
   int sink_res = 0;
   size_t sizeSunk = 0;
   int poll_res = 0;
+  uint64_t checkSum = 0;
 
   // Init encoder and zero output buffer
   heatshrink_encoder_reset(&hse);
   memset(dmxCompBuf, 0, 600);
   dmxCompSize = 0;
 
+    // Append an 8-byte "checksum"
+  for (int i = 0; i <= 511; i++) {
+    checkSum += dmxBuf[universeId][i];
+  }
+
   // Compresssion
   sink_res = heatshrink_encoder_sink(&hse, (uint8_t*)dmxBuf[universeId], 512, &sizeSunk);
+  heatshrink_encoder_sink(&hse, (uint8_t*)&checkSum, 8, &sizeSunk);
   heatshrink_encoder_finish(&hse);
   
   poll_res = heatshrink_encoder_poll(&hse, (uint8_t*)dmxCompBuf, 600, &dmxCompSize);
@@ -223,11 +230,15 @@ void unCompressDmxBuf(uint8_t universeId) {
   int sink_res = 0;
   size_t sizeSunk = 0;
   int poll_res = 0;
+  uint64_t checksum = 0;
 
   // Init decoder and zero output buffer
   heatshrink_decoder_reset(&hsd);
 
   sink_res = heatshrink_decoder_sink(&hsd, (uint8_t*)dmxCompBuf, dmxCompSize, &sizeSunk);
+
+
+
   heatshrink_decoder_finish(&hsd);
   size_t polled2 = 0;
   poll_res = heatshrink_decoder_poll(&hsd,(uint8_t*)dmxPrevBuf[universeId], 512, &polled2);
