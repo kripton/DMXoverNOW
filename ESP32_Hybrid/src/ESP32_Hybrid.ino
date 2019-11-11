@@ -124,6 +124,10 @@ uint8_t allZeroCount = 0;
 uint8_t frame0arrived = 0;
 uint8_t frame1arrived = 0;
 
+uint8_t lenError = 0;
+
+uint8_t checkSumMismatch = 0;
+
 uint8_t droppedFrameCounter = 0;
 
 // Statically allocated Base64 contexts
@@ -284,6 +288,8 @@ void unCompressDmxBuf(uint8_t universeId) {
   int sink_res = 0;
   size_t sizeSunk = 0;
   int poll_res = 0;
+  uint64_t checkSum = 0;
+  uint64_t checkSumCalculated = 0;
 
   // Init decoder and zero output buffer
   heatshrink_decoder_reset(&hsd);
@@ -292,10 +298,19 @@ void unCompressDmxBuf(uint8_t universeId) {
   sink_res = heatshrink_decoder_sink(&hsd, (uint8_t*)dmxCompBuf, dmxCompSize, &sizeSunk);
   heatshrink_decoder_finish(&hsd);
   size_t polled2 = 0;
+  size_t polled3 = 0;
   poll_res = heatshrink_decoder_poll(&hsd,(uint8_t*)dmxBuf[universeId], 512, &polled2);
+  heatshrink_decoder_poll(&hsd, (uint8_t*)&checkSum, 8, &polled3);
 
   if (polled2 != 512) {
     sizeMismatchCount++;
+  }
+
+  for (int i = 0; i <= 511; i++) {
+    checkSumCalculated += dmxBuf[universeId][i];
+  }
+  if (checkSumCalculated != checkSum) {
+    checkSumMismatch++;
   }
 
   if (dmxBuf[universeId][511] == 0) {
@@ -315,7 +330,7 @@ void unCompressDmxBuf(uint8_t universeId) {
   }
 
   memset((void*)line5.c_str(), 0, 25);
-  sprintf((char*)line5.c_str(), "%03d %02x %02x %02x %02x", polled2, sizeMismatchCount, lastZeroCount, allZeroCount, droppedFrameCounter);
+  sprintf((char*)line5.c_str(), "%03d %02x %02x %02x %02x %02x %02x", polled2, sizeMismatchCount, lastZeroCount, allZeroCount, droppedFrameCounter, lenError, checkSumMismatch);
 
 }
 
@@ -667,6 +682,9 @@ static void radioRecvCB(const uint8_t *mac_addr, const uint8_t *data, int len) {
     case 0x15: // KeyFrame compressed 1/2
       memset(dmxCompBuf, 0, 600);
       memcpy(dmxCompBuf, data + 2, len - 2);
+      if (len != 232) {
+        lenError++;
+      }
       dmxCompSize = len - 2;
       frame0arrived = 1;
       frame1arrived = 0;
@@ -680,10 +698,14 @@ static void radioRecvCB(const uint8_t *mac_addr, const uint8_t *data, int len) {
         droppedFrameCounter++;
       }
       frame0arrived = 0;
+      frame1arrived = 0;
       break;
      case 0x17: // KeyFrame compressed 1/3
       memset(dmxCompBuf, 0, 600);
       memcpy(dmxCompBuf, data + 2, len - 2);
+      if (len != 232) {
+        lenError++;
+      }
       dmxCompSize = len - 2;
       frame0arrived = 1;
       frame1arrived = 0;
@@ -692,6 +714,9 @@ static void radioRecvCB(const uint8_t *mac_addr, const uint8_t *data, int len) {
       if (frame0arrived && !frame1arrived) {
         memcpy(dmxCompBuf + 230, data + 2, len - 2);
         dmxCompSize += len - 2;
+        if (len != 232) {
+          lenError++;
+        }
         frame1arrived = 1;
       } else {
         droppedFrameCounter++;
