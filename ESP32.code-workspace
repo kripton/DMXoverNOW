@@ -7,10 +7,18 @@
 		{
 			"name": "ESP32_Slave",
 			"path": "ESP32_Slave"
-		},{
-                        "name": "ESP32_Hybrid",
-                        "path": "ESP32_Hybrid"
-                }
+		},
+		{
+			"name": "ESP32_Hybrid",
+			"path": "ESP32_Hybrid"
+		},
+		{
+			"path": "/home/kripton/.platformio/lib/U8g2_ID942"
+		},
+		{
+			"name": "ESP32_HybridClean",
+			"path": "ESP32_HybridClean"
+		}
 	],
 	"settings": {}
 }
